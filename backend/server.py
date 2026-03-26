@@ -1677,6 +1677,380 @@ async def update_application_status(
     
     return {"message": "Application status updated"}
 
+# ============= CONTENT & COMMUNITY MODELS =============
+
+class PostType(str, Enum):
+    BLOG = "blog"
+    DISCUSSION = "discussion"
+    ACHIEVEMENT = "achievement"
+
+class PostVisibility(str, Enum):
+    PUBLIC = "public"
+    CONNECTIONS = "connections"
+    PRIVATE = "private"
+
+class PostCreate(BaseModel):
+    title: str
+    content: str
+    post_type: PostType
+    tags: List[str] = []
+    visibility: PostVisibility = PostVisibility.PUBLIC
+
+class Post(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    author_id: str
+    title: str
+    content: str
+    post_type: PostType
+    tags: List[str] = []
+    visibility: PostVisibility = PostVisibility.PUBLIC
+    like_count: int = 0
+    comment_count: int = 0
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class PostWithAuthor(BaseModel):
+    """Post with author details"""
+    post: Post
+    author: UserSearchResult
+    is_liked: bool = False
+    is_bookmarked: bool = False
+
+class CommentCreate(BaseModel):
+    content: str
+
+class Comment(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    post_id: str
+    author_id: str
+    content: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class CommentWithAuthor(BaseModel):
+    """Comment with author details"""
+    comment: Comment
+    author: UserSearchResult
+
+# ============= CONTENT ROUTES =============
+
+@api_router.post("/posts", response_model=Post)
+async def create_post(
+    post_data: PostCreate,
+    current_user: User = Depends(get_current_user)
+):
+    """Create a new post"""
+    post = Post(
+        **post_data.model_dump(),
+        author_id=current_user.id
+    )
+    
+    doc = post.model_dump()
+    doc['created_at'] = doc['created_at'].isoformat()
+    doc['updated_at'] = doc['updated_at'].isoformat()
+    
+    await db.posts.insert_one(doc)
+    
+    return post
+
+@api_router.put("/posts/{post_id}", response_model=Post)
+async def update_post(
+    post_id: str,
+    post_data: PostCreate,
+    current_user: User = Depends(get_current_user)
+):
+    """Update a post"""
+    post_doc = await db.posts.find_one({"id": post_id}, {"_id": 0})
+    if not post_doc:
+        raise HTTPException(status_code=404, detail="Post not found")
+    
+    if post_doc["author_id"] != current_user.id:
+        raise HTTPException(status_code=403, detail="You can only edit your own posts")
+    
+    update_data = post_data.model_dump()
+    update_data['updated_at'] = datetime.now(timezone.utc).isoformat()
+    
+    await db.posts.update_one({"id": post_id}, {"$set": update_data})
+    
+    updated_doc = await db.posts.find_one({"id": post_id}, {"_id": 0})
+    if isinstance(updated_doc.get('created_at'), str):
+        updated_doc['created_at'] = datetime.fromisoformat(updated_doc['created_at'])
+    if isinstance(updated_doc.get('updated_at'), str):
+        updated_doc['updated_at'] = datetime.fromisoformat(updated_doc['updated_at'])
+    
+    return Post(**updated_doc)
+
+@api_router.delete("/posts/{post_id}")
+async def delete_post(
+    post_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Delete a post"""
+    post_doc = await db.posts.find_one({"id": post_id}, {"_id": 0})
+    if not post_doc:
+        raise HTTPException(status_code=404, detail="Post not found")
+    
+    if post_doc["author_id"] != current_user.id:
+        raise HTTPException(status_code=403, detail="You can only delete your own posts")
+    
+    await db.posts.delete_one({"id": post_id})
+    await db.comments.delete_many({"post_id": post_id})
+    await db.likes.delete_many({"post_id": post_id})
+    await db.bookmarks.delete_many({"post_id": post_id})
+    
+    return {"message": "Post deleted"}
+
+@api_router.get("/posts/feed", response_model=List[PostWithAuthor])
+async def get_feed(
+    post_type: Optional[PostType] = None,
+    tags: Optional[str] = None,
+    limit: int = 50,
+    current_user: User = Depends(get_current_user)
+):
+    """Get posts feed"""
+    search_filter = {"visibility": {"$in": ["public", "connections"]}}
+    
+    if post_type:
+        search_filter["post_type"] = post_type
+    
+    if tags:
+        search_filter["tags"] = {"$in": [tags]}
+    
+    posts_cursor = db.posts.find(search_filter, {"_id": 0}).limit(limit).sort("created_at", -1)
+    posts = await posts_cursor.to_list(length=limit)
+    
+    results = []
+    for post in posts:
+        author_doc = await db.users.find_one({"id": post["author_id"]}, {"_id": 0, "password_hash": 0})
+        if not author_doc:
+            continue
+        
+        profile_doc = await db.profiles.find_one({"user_id": post["author_id"]}, {"_id": 0})
+        profile = profile_doc if profile_doc else {}
+        
+        if isinstance(post.get('created_at'), str):
+            post['created_at'] = datetime.fromisoformat(post['created_at'])
+        if isinstance(post.get('updated_at'), str):
+            post['updated_at'] = datetime.fromisoformat(post['updated_at'])
+        
+        post_obj = Post(**post)
+        
+        author = UserSearchResult(
+            id=author_doc["id"],
+            full_name=author_doc["full_name"],
+            email=author_doc["email"],
+            role=author_doc["role"],
+            college=author_doc["college"],
+            graduation_year=author_doc.get("graduation_year"),
+            department=author_doc.get("department"),
+            headline=profile.get("headline"),
+            profile_picture=profile.get("profile_picture"),
+            skills=profile.get("skills", []),
+            available_for_mentorship=profile.get("available_for_mentorship", False)
+        )
+        
+        is_liked = await db.likes.find_one({"post_id": post["id"], "user_id": current_user.id}) is not None
+        is_bookmarked = await db.bookmarks.find_one({"post_id": post["id"], "user_id": current_user.id}) is not None
+        
+        results.append(PostWithAuthor(post=post_obj, author=author, is_liked=is_liked, is_bookmarked=is_bookmarked))
+    
+    return results
+
+@api_router.get("/posts/{post_id}", response_model=PostWithAuthor)
+async def get_post(
+    post_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Get post details"""
+    post_doc = await db.posts.find_one({"id": post_id}, {"_id": 0})
+    if not post_doc:
+        raise HTTPException(status_code=404, detail="Post not found")
+    
+    author_doc = await db.users.find_one({"id": post_doc["author_id"]}, {"_id": 0, "password_hash": 0})
+    profile_doc = await db.profiles.find_one({"user_id": post_doc["author_id"]}, {"_id": 0})
+    profile = profile_doc if profile_doc else {}
+    
+    if isinstance(post_doc.get('created_at'), str):
+        post_doc['created_at'] = datetime.fromisoformat(post_doc['created_at'])
+    if isinstance(post_doc.get('updated_at'), str):
+        post_doc['updated_at'] = datetime.fromisoformat(post_doc['updated_at'])
+    
+    post_obj = Post(**post_doc)
+    
+    author = UserSearchResult(
+        id=author_doc["id"],
+        full_name=author_doc["full_name"],
+        email=author_doc["email"],
+        role=author_doc["role"],
+        college=author_doc["college"],
+        graduation_year=author_doc.get("graduation_year"),
+        department=author_doc.get("department"),
+        headline=profile.get("headline"),
+        profile_picture=profile.get("profile_picture"),
+        skills=profile.get("skills", []),
+        available_for_mentorship=profile.get("available_for_mentorship", False)
+    )
+    
+    is_liked = await db.likes.find_one({"post_id": post_id, "user_id": current_user.id}) is not None
+    is_bookmarked = await db.bookmarks.find_one({"post_id": post_id, "user_id": current_user.id}) is not None
+    
+    return PostWithAuthor(post=post_obj, author=author, is_liked=is_liked, is_bookmarked=is_bookmarked)
+
+@api_router.post("/posts/{post_id}/like")
+async def toggle_like(
+    post_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Toggle like on a post"""
+    existing = await db.likes.find_one({"post_id": post_id, "user_id": current_user.id})
+    
+    if existing:
+        await db.likes.delete_one({"post_id": post_id, "user_id": current_user.id})
+        await db.posts.update_one({"id": post_id}, {"$inc": {"like_count": -1}})
+        return {"liked": False, "message": "Post unliked"}
+    else:
+        like_doc = {
+            "id": str(uuid.uuid4()),
+            "post_id": post_id,
+            "user_id": current_user.id,
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        await db.likes.insert_one(like_doc)
+        await db.posts.update_one({"id": post_id}, {"$inc": {"like_count": 1}})
+        return {"liked": True, "message": "Post liked"}
+
+@api_router.post("/posts/{post_id}/comment", response_model=Comment)
+async def add_comment(
+    post_id: str,
+    comment_data: CommentCreate,
+    current_user: User = Depends(get_current_user)
+):
+    """Add a comment to a post"""
+    post = await db.posts.find_one({"id": post_id})
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    
+    comment = Comment(
+        post_id=post_id,
+        author_id=current_user.id,
+        content=comment_data.content
+    )
+    
+    doc = comment.model_dump()
+    doc['created_at'] = doc['created_at'].isoformat()
+    doc['updated_at'] = doc['updated_at'].isoformat()
+    
+    await db.comments.insert_one(doc)
+    await db.posts.update_one({"id": post_id}, {"$inc": {"comment_count": 1}})
+    
+    return comment
+
+@api_router.get("/posts/{post_id}/comments", response_model=List[CommentWithAuthor])
+async def get_comments(
+    post_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Get comments for a post"""
+    comments_cursor = db.comments.find({"post_id": post_id}, {"_id": 0}).sort("created_at", -1)
+    comments = await comments_cursor.to_list(length=100)
+    
+    results = []
+    for comment in comments:
+        author_doc = await db.users.find_one({"id": comment["author_id"]}, {"_id": 0, "password_hash": 0})
+        if not author_doc:
+            continue
+        
+        profile_doc = await db.profiles.find_one({"user_id": comment["author_id"]}, {"_id": 0})
+        profile = profile_doc if profile_doc else {}
+        
+        if isinstance(comment.get('created_at'), str):
+            comment['created_at'] = datetime.fromisoformat(comment['created_at'])
+        if isinstance(comment.get('updated_at'), str):
+            comment['updated_at'] = datetime.fromisoformat(comment['updated_at'])
+        
+        comment_obj = Comment(**comment)
+        
+        author = UserSearchResult(
+            id=author_doc["id"],
+            full_name=author_doc["full_name"],
+            email=author_doc["email"],
+            role=author_doc["role"],
+            college=author_doc["college"],
+            graduation_year=author_doc.get("graduation_year"),
+            department=author_doc.get("department"),
+            headline=profile.get("headline"),
+            profile_picture=profile.get("profile_picture"),
+            skills=profile.get("skills", []),
+            available_for_mentorship=profile.get("available_for_mentorship", False)
+        )
+        
+        results.append(CommentWithAuthor(comment=comment_obj, author=author))
+    
+    return results
+
+@api_router.post("/posts/{post_id}/bookmark")
+async def toggle_bookmark(
+    post_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Toggle bookmark on a post"""
+    existing = await db.bookmarks.find_one({"post_id": post_id, "user_id": current_user.id})
+    
+    if existing:
+        await db.bookmarks.delete_one({"post_id": post_id, "user_id": current_user.id})
+        return {"bookmarked": False, "message": "Bookmark removed"}
+    else:
+        bookmark_doc = {
+            "id": str(uuid.uuid4()),
+            "post_id": post_id,
+            "user_id": current_user.id,
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        await db.bookmarks.insert_one(bookmark_doc)
+        return {"bookmarked": True, "message": "Post bookmarked"}
+
+@api_router.get("/posts/my/all", response_model=List[PostWithAuthor])
+async def get_my_posts(current_user: User = Depends(get_current_user)):
+    """Get current user's posts"""
+    posts_cursor = db.posts.find({"author_id": current_user.id}, {"_id": 0}).sort("created_at", -1)
+    posts = await posts_cursor.to_list(length=100)
+    
+    profile_doc = await db.profiles.find_one({"user_id": current_user.id}, {"_id": 0})
+    profile = profile_doc if profile_doc else {}
+    
+    author = UserSearchResult(
+        id=current_user.id,
+        full_name=current_user.full_name,
+        email=current_user.email,
+        role=current_user.role,
+        college=current_user.college,
+        graduation_year=current_user.graduation_year,
+        department=current_user.department,
+        headline=profile.get("headline"),
+        profile_picture=profile.get("profile_picture"),
+        skills=profile.get("skills", []),
+        available_for_mentorship=profile.get("available_for_mentorship", False)
+    )
+    
+    results = []
+    for post in posts:
+        if isinstance(post.get('created_at'), str):
+            post['created_at'] = datetime.fromisoformat(post['created_at'])
+        if isinstance(post.get('updated_at'), str):
+            post['updated_at'] = datetime.fromisoformat(post['updated_at'])
+        
+        post_obj = Post(**post)
+        is_liked = await db.likes.find_one({"post_id": post["id"], "user_id": current_user.id}) is not None
+        is_bookmarked = await db.bookmarks.find_one({"post_id": post["id"], "user_id": current_user.id}) is not None
+        
+        results.append(PostWithAuthor(post=post_obj, author=author, is_liked=is_liked, is_bookmarked=is_bookmarked))
+    
+    return results
+
 @api_router.get("/")
 async def root():
     return {"message": "CAMPUS-BRIDGE API v1.0"}
