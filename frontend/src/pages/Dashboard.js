@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { 
   GraduationCap, Users, Briefcase, Calendar, MessageSquare, 
-  Bell, LogOut, User, Home, BookOpen, Award 
+  Bell, LogOut, User, Home, BookOpen, Award, Search, UserCheck
 } from 'lucide-react';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -15,26 +15,33 @@ const Dashboard = () => {
   const navigate = useNavigate();
   const [stats, setStats] = useState({
     connections: 0,
-    pendingRequests: 0
+    pending_requests: 0,
+    mentorships: 0,
+    applications: 0,
+    posts: 0,
+    events: 0
   });
+  const [notifications, setNotifications] = useState([]);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
 
   useEffect(() => {
-    loadStats();
+    loadDashboardData();
   }, []);
 
-  const loadStats = async () => {
+  const loadDashboardData = async () => {
     try {
-      const [connectionsRes, requestsRes] = await Promise.all([
-        axios.get(`${API}/connections?status=accepted`),
-        axios.get(`${API}/connections/requests/received`)
+      const [analyticsRes, notificationsRes, unreadRes] = await Promise.all([
+        axios.get(`${API}/analytics/dashboard`),
+        axios.get(`${API}/notifications?limit=5`),
+        axios.get(`${API}/notifications/unread/count`)
       ]);
       
-      setStats({
-        connections: connectionsRes.data.length,
-        pendingRequests: requestsRes.data.length
-      });
+      setStats(analyticsRes.data);
+      setNotifications(notificationsRes.data);
+      setUnreadCount(unreadRes.data.count);
     } catch (err) {
-      console.error('Failed to load stats:', err);
+      console.error('Failed to load dashboard data:', err);
     }
   };
 
@@ -50,20 +57,66 @@ const Dashboard = () => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
             {/* Logo */}
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-purple-600 rounded-lg flex items-center justify-center">
-                <GraduationCap className="w-6 h-6 text-white" />
+            <div className="flex items-center gap-8">
+              <div 
+                onClick={() => navigate('/dashboard')}
+                className="flex items-center gap-3 cursor-pointer"
+              >
+                <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-purple-600 rounded-lg flex items-center justify-center">
+                  <GraduationCap className="w-6 h-6 text-white" />
+                </div>
+                <span className="text-xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+                  CAMPUS-BRIDGE
+                </span>
               </div>
-              <span className="text-xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-                CAMPUS-BRIDGE
-              </span>
+
+              {/* Navigation Links */}
+              <div className="hidden md:flex items-center gap-1">
+                <button
+                  onClick={() => navigate('/dashboard')}
+                  className="px-3 py-2 text-sm font-medium text-gray-700 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                >
+                  Dashboard
+                </button>
+                <button
+                  onClick={() => navigate('/search')}
+                  className="px-3 py-2 text-sm font-medium text-gray-700 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                >
+                  Network
+                </button>
+                <button
+                  onClick={() => navigate('/jobs')}
+                  className="px-3 py-2 text-sm font-medium text-gray-700 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                >
+                  Jobs
+                </button>
+                <button
+                  onClick={() => navigate('/feed')}
+                  className="px-3 py-2 text-sm font-medium text-gray-700 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                >
+                  Feed
+                </button>
+                <button
+                  onClick={() => navigate('/events')}
+                  className="px-3 py-2 text-sm font-medium text-gray-700 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                >
+                  Events
+                </button>
+              </div>
             </div>
 
             {/* Right Side */}
             <div className="flex items-center gap-4">
-              <button className="p-2 hover:bg-gray-100 rounded-lg relative">
+              <button 
+                onClick={() => setShowNotifications(!showNotifications)}
+                className="p-2 hover:bg-gray-100 rounded-lg relative"
+              >
                 <Bell className="w-5 h-5 text-gray-600" />
-                <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
+                {unreadCount > 0 && (
+                  <span className="absolute top-1 right-1 w-4 h-4 bg-red-500 rounded-full text-xs text-white flex items-center justify-center">
+                    {unreadCount}
+                  </span>
+                )}
               </button>
               <div className="flex items-center gap-3">
                 <div className="text-right">
@@ -86,6 +139,32 @@ const Dashboard = () => {
             </div>
           </div>
         </div>
+
+        {/* Notifications Dropdown */}
+        {showNotifications && (
+          <div className="absolute right-4 top-16 w-80 bg-white rounded-lg shadow-xl border border-gray-200 z-50">
+            <div className="p-4 border-b border-gray-200">
+              <h3 className="font-semibold text-gray-800">Notifications</h3>
+            </div>
+            <div className="max-h-96 overflow-y-auto">
+              {notifications.length === 0 ? (
+                <div className="p-4 text-center text-gray-500 text-sm">
+                  No notifications
+                </div>
+              ) : (
+                notifications.map((notif) => (
+                  <div
+                    key={notif.id}
+                    className={`p-4 border-b border-gray-100 hover:bg-gray-50 cursor-pointer ${!notif.is_read ? 'bg-blue-50' : ''}`}
+                  >
+                    <p className="text-sm font-medium text-gray-800">{notif.title}</p>
+                    <p className="text-xs text-gray-600 mt-1">{notif.message}</p>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
       </nav>
 
       {/* Main Content */}
@@ -115,39 +194,48 @@ const Dashboard = () => {
               <span className="text-2xl font-bold text-gray-800">{stats.connections}</span>
             </div>
             <p className="text-sm text-gray-600 font-medium">Connections</p>
-            {stats.pendingRequests > 0 && (
-              <p className="text-xs text-blue-600 mt-1">{stats.pendingRequests} pending request{stats.pendingRequests !== 1 ? 's' : ''}</p>
+            {stats.pending_requests > 0 && (
+              <p className="text-xs text-blue-600 mt-1">{stats.pending_requests} pending</p>
             )}
           </div>
 
-          <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-200">
+          <div 
+            onClick={() => navigate('/mentorships')}
+            className="bg-white rounded-xl p-6 shadow-sm border border-gray-200 cursor-pointer hover:shadow-md transition-shadow"
+          >
             <div className="flex items-center justify-between mb-4">
               <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center">
-                <Briefcase className="w-6 h-6 text-purple-600" />
+                <UserCheck className="w-6 h-6 text-purple-600" />
               </div>
-              <span className="text-2xl font-bold text-gray-800">0</span>
+              <span className="text-2xl font-bold text-gray-800">{stats.mentorships}</span>
             </div>
-            <p className="text-sm text-gray-600 font-medium">Job Applications</p>
+            <p className="text-sm text-gray-600 font-medium">Mentorships</p>
           </div>
 
-          <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-200">
+          <div 
+            onClick={() => navigate('/applications')}
+            className="bg-white rounded-xl p-6 shadow-sm border border-gray-200 cursor-pointer hover:shadow-md transition-shadow"
+          >
             <div className="flex items-center justify-between mb-4">
               <div className="w-12 h-12 bg-pink-100 rounded-lg flex items-center justify-center">
-                <MessageSquare className="w-6 h-6 text-pink-600" />
+                <Briefcase className="w-6 h-6 text-pink-600" />
               </div>
-              <span className="text-2xl font-bold text-gray-800">0</span>
+              <span className="text-2xl font-bold text-gray-800">{stats.applications}</span>
             </div>
-            <p className="text-sm text-gray-600 font-medium">Messages</p>
+            <p className="text-sm text-gray-600 font-medium">Applications</p>
           </div>
 
-          <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-200">
+          <div 
+            onClick={() => navigate('/events')}
+            className="bg-white rounded-xl p-6 shadow-sm border border-gray-200 cursor-pointer hover:shadow-md transition-shadow"
+          >
             <div className="flex items-center justify-between mb-4">
               <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
                 <Calendar className="w-6 h-6 text-green-600" />
               </div>
-              <span className="text-2xl font-bold text-gray-800">0</span>
+              <span className="text-2xl font-bold text-gray-800">{stats.events}</span>
             </div>
-            <p className="text-sm text-gray-600 font-medium">Events</p>
+            <p className="text-sm text-gray-600 font-medium">My Events</p>
           </div>
         </div>
 

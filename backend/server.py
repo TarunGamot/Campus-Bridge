@@ -2441,6 +2441,138 @@ async def get_my_events(current_user: User = Depends(get_current_user)):
     
     return results
 
+# ============= NOTIFICATION MODELS =============
+
+class NotificationType(str, Enum):
+    CONNECTION_REQUEST = "connection_request"
+    MENTORSHIP_REQUEST = "mentorship_request"
+    JOB_APPLICATION = "job_application"
+    EVENT_RSVP = "event_rsvp"
+    POST_LIKE = "post_like"
+    POST_COMMENT = "post_comment"
+
+class Notification(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str
+    type: NotificationType
+    title: str
+    message: str
+    link: Optional[str] = None
+    is_read: bool = False
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+# ============= NOTIFICATION ROUTES =============
+
+@api_router.get("/notifications", response_model=List[Notification])
+async def get_notifications(
+    limit: int = 20,
+    current_user: User = Depends(get_current_user)
+):
+    """Get user notifications"""
+    notifications_cursor = db.notifications.find(
+        {"user_id": current_user.id},
+        {"_id": 0}
+    ).limit(limit).sort("created_at", -1)
+    notifications = await notifications_cursor.to_list(length=limit)
+    
+    results = []
+    for notif in notifications:
+        if isinstance(notif.get('created_at'), str):
+            notif['created_at'] = datetime.fromisoformat(notif['created_at'])
+        results.append(Notification(**notif))
+    
+    return results
+
+@api_router.put("/notifications/{notification_id}/read")
+async def mark_notification_read(
+    notification_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Mark notification as read"""
+    result = await db.notifications.update_one(
+        {"id": notification_id, "user_id": current_user.id},
+        {"$set": {"is_read": True}}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    
+    return {"message": "Notification marked as read"}
+
+@api_router.put("/notifications/mark-all-read")
+async def mark_all_notifications_read(current_user: User = Depends(get_current_user)):
+    """Mark all notifications as read"""
+    await db.notifications.update_many(
+        {"user_id": current_user.id, "is_read": False},
+        {"$set": {"is_read": True}}
+    )
+    
+    return {"message": "All notifications marked as read"}
+
+@api_router.get("/notifications/unread/count")
+async def get_unread_count(current_user: User = Depends(get_current_user)):
+    """Get unread notification count"""
+    count = await db.notifications.count_documents({
+        "user_id": current_user.id,
+        "is_read": False
+    })
+    
+    return {"count": count}
+
+# ============= ANALYTICS ROUTES =============
+
+@api_router.get("/analytics/dashboard")
+async def get_dashboard_analytics(current_user: User = Depends(get_current_user)):
+    """Get dashboard analytics"""
+    # Connections count
+    connections_count = await db.connections.count_documents({
+        "$or": [
+            {"sender_id": current_user.id, "status": "accepted"},
+            {"receiver_id": current_user.id, "status": "accepted"}
+        ]
+    })
+    
+    # Pending connection requests
+    pending_requests = await db.connections.count_documents({
+        "receiver_id": current_user.id,
+        "status": "pending"
+    })
+    
+    # Active mentorships
+    mentorships_count = await db.mentorships.count_documents({
+        "$or": [
+            {"student_id": current_user.id, "status": "accepted"},
+            {"mentor_id": current_user.id, "status": "accepted"}
+        ]
+    })
+    
+    # Job applications
+    applications_count = await db.applications.count_documents({
+        "applicant_id": current_user.id
+    })
+    
+    # My posts
+    posts_count = await db.posts.count_documents({
+        "author_id": current_user.id
+    })
+    
+    # Events attending
+    events_count = await db.rsvps.count_documents({
+        "user_id": current_user.id,
+        "status": {"$in": ["going", "maybe"]}
+    })
+    
+    return {
+        "connections": connections_count,
+        "pending_requests": pending_requests,
+        "mentorships": mentorships_count,
+        "applications": applications_count,
+        "posts": posts_count,
+        "events": events_count
+    }
+
 @api_router.get("/")
 async def root():
     return {"message": "CAMPUS-BRIDGE API v1.0"}
