@@ -172,19 +172,19 @@ const Dashboard = () => {
             </button>
             
             <button 
-              onClick={() => navigate('/find-mentors')}
+              onClick={() => navigate('/feed')}
               className="p-4 border-2 border-dashed border-gray-300 rounded-lg hover:border-pink-500 hover:bg-pink-50 transition-all group"
             >
               <BookOpen className="w-8 h-8 text-gray-400 group-hover:text-pink-600 mx-auto mb-2" />
-              <p className="text-sm font-medium text-gray-600 group-hover:text-pink-600">Find Mentors</p>
+              <p className="text-sm font-medium text-gray-600 group-hover:text-pink-600">Community Feed</p>
             </button>
             
             <button 
-              onClick={() => navigate('/mentorships')}
+              onClick={() => navigate('/find-mentors')}
               className="p-4 border-2 border-dashed border-gray-300 rounded-lg hover:border-green-500 hover:bg-green-50 transition-all group"
             >
               <Calendar className="w-8 h-8 text-gray-400 group-hover:text-green-600 mx-auto mb-2" />
-              <p className="text-sm font-medium text-gray-600 group-hover:text-green-600">My Mentorships</p>
+              <p className="text-sm font-medium text-gray-600 group-hover:text-green-600">Find Mentors</p>
             </button>
           </div>
         </div>
