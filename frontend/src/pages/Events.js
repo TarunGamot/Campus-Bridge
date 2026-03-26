@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import axios from 'axios';
-import { Calendar, MapPin, Users, Clock, Plus, Video, Check, X, Minus } from 'lucide-react';
+import { Calendar, MapPin, Users, Clock, Plus, Video, Check, X, Minus, Home } from 'lucide-react';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -95,15 +95,24 @@ const Events = () => {
             <h1 className="text-3xl font-bold text-gray-800 mb-2">Events</h1>
             <p className="text-gray-600">Discover and join campus events</p>
           </div>
-          {(user?.role === 'alumni' || user?.role === 'admin') && (
+          <div className="flex items-center gap-3">
             <button
-              onClick={() => setShowCreateModal(true)}
-              className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium flex items-center gap-2"
+              onClick={() => navigate('/dashboard')}
+              className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 flex items-center gap-2"
             >
-              <Plus className="w-5 h-5" />
-              Create Event
+              <Home className="w-5 h-5" />
+              Dashboard
             </button>
-          )}
+            {(user?.role === 'alumni' || user?.role === 'admin') && (
+              <button
+                onClick={() => setShowCreateModal(true)}
+                className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium flex items-center gap-2"
+              >
+                <Plus className="w-5 h-5" />
+                Create Event
+              </button>
+            )}
+          </div>
         </div>
 
         {loading ? (

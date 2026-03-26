@@ -127,10 +127,13 @@ const ProfileEdit = () => {
       <div className="max-w-4xl mx-auto px-4">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
-          <h1 className="text-3xl font-bold text-gray-800">Edit Profile</h1>
+          <div>
+            <h1 className="text-3xl font-bold text-gray-800">Edit Profile</h1>
+            <p className="text-gray-600 mt-1">Update your profile information</p>
+          </div>
           <button
             onClick={() => navigate(`/profile/${user.id}`)}
-            className="flex items-center gap-2 px-4 py-2 text-gray-600 hover:text-gray-800"
+            className="flex items-center gap-2 px-4 py-2 text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors"
           >
             <X className="w-5 h-5" />
             Cancel

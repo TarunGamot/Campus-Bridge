@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import axios from 'axios';
-import { Users, UserCheck, Clock, UserX, GraduationCap, Briefcase, Heart } from 'lucide-react';
+import { Users, UserCheck, Clock, UserX, GraduationCap, Briefcase, Heart, Home } from 'lucide-react';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -178,9 +178,18 @@ const Connections = () => {
     <div className="min-h-screen bg-gray-50">
       <div className="max-w-7xl mx-auto px-4 py-8">
         {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-800 mb-2">My Network</h1>
-          <p className="text-gray-600">Manage your connections and grow your network</p>
+        <div className="flex items-center justify-between mb-8">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-800 mb-2">My Network</h1>
+            <p className="text-gray-600">Manage your connections and grow your network</p>
+          </div>
+          <button
+            onClick={() => navigate('/dashboard')}
+            className="flex items-center gap-2 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
+          >
+            <Home className="w-5 h-5" />
+            Dashboard
+          </button>
         </div>
 
         {/* Tabs */}

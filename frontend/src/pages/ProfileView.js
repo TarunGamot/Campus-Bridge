@@ -112,9 +112,9 @@ const ProfileView = () => {
       {/* Header */}
       <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
         <div className="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between">
-          <button onClick={() => navigate(-1)} className="flex items-center gap-2 text-gray-600 hover:text-gray-800">
+          <button onClick={() => navigate('/dashboard')} className="flex items-center gap-2 text-gray-600 hover:text-gray-800">
             <ArrowLeft className="w-5 h-5" />
-            Back
+            Back to Dashboard
           </button>
           <div className="flex gap-2">
             {!isOwnProfile && connectionStatus && (

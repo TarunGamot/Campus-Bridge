@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import axios from 'axios';
-import { Plus, Heart, MessageCircle, Bookmark, Share2, MoreVertical } from 'lucide-react';
+import { Plus, Heart, MessageCircle, Bookmark, Share2, MoreVertical, Home } from 'lucide-react';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -101,13 +101,22 @@ const Feed = () => {
             <h1 className="text-3xl font-bold text-gray-800 mb-2">Community Feed</h1>
             <p className="text-gray-600">Share knowledge and connect with your community</p>
           </div>
-          <button
-            onClick={() => setShowCreateModal(true)}
-            className="px-6 py-3 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-lg hover:from-blue-700 hover:to-purple-700 font-medium flex items-center gap-2"
-          >
-            <Plus className="w-5 h-5" />
-            Create Post
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => navigate('/dashboard')}
+              className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 flex items-center gap-2"
+            >
+              <Home className="w-5 h-5" />
+              Dashboard
+            </button>
+            <button
+              onClick={() => setShowCreateModal(true)}
+              className="px-6 py-3 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-lg hover:from-blue-700 hover:to-purple-700 font-medium flex items-center gap-2"
+            >
+              <Plus className="w-5 h-5" />
+              Create Post
+            </button>
+          </div>
         </div>
 
         {/* Filters */}
