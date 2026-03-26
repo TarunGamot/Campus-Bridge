@@ -42,7 +42,10 @@ const Dashboard = () => {
                   <p className="text-sm font-semibold text-gray-800">{user?.full_name}</p>
                   <p className="text-xs text-gray-500 capitalize">{user?.role}</p>
                 </div>
-                <div className="w-10 h-10 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center text-white font-semibold">
+                <div 
+                  onClick={() => navigate(`/profile/${user?.id}`)}
+                  className="w-10 h-10 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center text-white font-semibold cursor-pointer hover:shadow-lg transition-shadow"
+                >
                   {user?.full_name?.charAt(0)}
                 </div>
               </div>
@@ -118,7 +121,10 @@ const Dashboard = () => {
         <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-200 mb-8">
           <h2 className="text-xl font-bold text-gray-800 mb-4">Quick Actions</h2>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <button className="p-4 border-2 border-dashed border-gray-300 rounded-lg hover:border-blue-500 hover:bg-blue-50 transition-all group">
+            <button 
+              onClick={() => navigate('/search')}
+              className="p-4 border-2 border-dashed border-gray-300 rounded-lg hover:border-blue-500 hover:bg-blue-50 transition-all group"
+            >
               <Users className="w-8 h-8 text-gray-400 group-hover:text-blue-600 mx-auto mb-2" />
               <p className="text-sm font-medium text-gray-600 group-hover:text-blue-600">Find Alumni</p>
             </button>

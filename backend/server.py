@@ -225,6 +225,263 @@ async def get_me(current_user: User = Depends(get_current_user)):
     """Get current user info"""
     return current_user
 
+# ============= PROFILE MODELS =============
+
+class Education(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    institution: str
+    degree: str
+    field_of_study: Optional[str] = None
+    start_year: int
+    end_year: Optional[int] = None
+    description: Optional[str] = None
+
+class WorkExperience(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    company: str
+    position: str
+    location: Optional[str] = None
+    start_date: str
+    end_date: Optional[str] = None
+    current: bool = False
+    description: Optional[str] = None
+
+class Project(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    title: str
+    description: str
+    technologies: List[str] = []
+    link: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+
+class Achievement(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    title: str
+    description: str
+    date: Optional[str] = None
+
+class SocialLinks(BaseModel):
+    linkedin: Optional[str] = None
+    github: Optional[str] = None
+    twitter: Optional[str] = None
+    website: Optional[str] = None
+
+class Profile(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    
+    user_id: str
+    bio: Optional[str] = None
+    location: Optional[str] = None
+    phone: Optional[str] = None
+    profile_picture: Optional[str] = None
+    
+    # Professional Info
+    headline: Optional[str] = None
+    skills: List[str] = []
+    interests: List[str] = []
+    
+    # Detailed sections
+    education: List[Education] = []
+    work_experience: List[WorkExperience] = []
+    projects: List[Project] = []
+    achievements: List[Achievement] = []
+    
+    # Social
+    social_links: Optional[SocialLinks] = None
+    
+    # Mentorship
+    available_for_mentorship: bool = False
+    mentorship_areas: List[str] = []
+    
+    # Privacy
+    profile_visibility: str = "public"  # public, connections, private
+    
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class ProfileUpdate(BaseModel):
+    bio: Optional[str] = None
+    location: Optional[str] = None
+    phone: Optional[str] = None
+    profile_picture: Optional[str] = None
+    headline: Optional[str] = None
+    skills: Optional[List[str]] = None
+    interests: Optional[List[str]] = None
+    education: Optional[List[Education]] = None
+    work_experience: Optional[List[WorkExperience]] = None
+    projects: Optional[List[Project]] = None
+    achievements: Optional[List[Achievement]] = None
+    social_links: Optional[SocialLinks] = None
+    available_for_mentorship: Optional[bool] = None
+    mentorship_areas: Optional[List[str]] = None
+    profile_visibility: Optional[str] = None
+
+class UserProfile(BaseModel):
+    """Combined user and profile data"""
+    user: User
+    profile: Profile
+
+class UserSearchResult(BaseModel):
+    """User search result with basic info"""
+    id: str
+    full_name: str
+    email: EmailStr
+    role: UserRole
+    college: str
+    graduation_year: Optional[int]
+    department: Optional[str]
+    headline: Optional[str]
+    profile_picture: Optional[str]
+    skills: List[str]
+    available_for_mentorship: bool
+
+# ============= PROFILE ROUTES =============
+
+@api_router.get("/profile/{user_id}", response_model=UserProfile)
+async def get_user_profile(user_id: str, current_user: User = Depends(get_current_user)):
+    """Get user profile by user_id"""
+    # Get user info
+    user_doc = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+    if not user_doc:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Convert datetime strings
+    if isinstance(user_doc.get('created_at'), str):
+        user_doc['created_at'] = datetime.fromisoformat(user_doc['created_at'])
+    if isinstance(user_doc.get('updated_at'), str):
+        user_doc['updated_at'] = datetime.fromisoformat(user_doc['updated_at'])
+    
+    user = User(**user_doc)
+    
+    # Get profile
+    profile_doc = await db.profiles.find_one({"user_id": user_id}, {"_id": 0})
+    
+    if profile_doc:
+        # Convert datetime strings
+        if isinstance(profile_doc.get('created_at'), str):
+            profile_doc['created_at'] = datetime.fromisoformat(profile_doc['created_at'])
+        if isinstance(profile_doc.get('updated_at'), str):
+            profile_doc['updated_at'] = datetime.fromisoformat(profile_doc['updated_at'])
+        profile = Profile(**profile_doc)
+    else:
+        # Create default profile if doesn't exist
+        profile = Profile(user_id=user_id)
+        doc = profile.model_dump()
+        doc['created_at'] = doc['created_at'].isoformat()
+        doc['updated_at'] = doc['updated_at'].isoformat()
+        await db.profiles.insert_one(doc)
+    
+    return UserProfile(user=user, profile=profile)
+
+@api_router.put("/profile", response_model=Profile)
+async def update_profile(profile_update: ProfileUpdate, current_user: User = Depends(get_current_user)):
+    """Update current user's profile"""
+    # Get existing profile or create new one
+    profile_doc = await db.profiles.find_one({"user_id": current_user.id}, {"_id": 0})
+    
+    if profile_doc:
+        # Convert datetime strings
+        if isinstance(profile_doc.get('created_at'), str):
+            profile_doc['created_at'] = datetime.fromisoformat(profile_doc['created_at'])
+        if isinstance(profile_doc.get('updated_at'), str):
+            profile_doc['updated_at'] = datetime.fromisoformat(profile_doc['updated_at'])
+        profile = Profile(**profile_doc)
+    else:
+        profile = Profile(user_id=current_user.id)
+    
+    # Update fields
+    update_data = profile_update.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(profile, field, value)
+    
+    profile.updated_at = datetime.now(timezone.utc)
+    
+    # Save to database
+    doc = profile.model_dump()
+    doc['created_at'] = doc['created_at'].isoformat()
+    doc['updated_at'] = doc['updated_at'].isoformat()
+    
+    await db.profiles.update_one(
+        {"user_id": current_user.id},
+        {"$set": doc},
+        upsert=True
+    )
+    
+    return profile
+
+@api_router.get("/profile/search/users", response_model=List[UserSearchResult])
+async def search_users(
+    query: Optional[str] = None,
+    role: Optional[UserRole] = None,
+    college: Optional[str] = None,
+    skills: Optional[str] = None,
+    graduation_year: Optional[int] = None,
+    available_for_mentorship: Optional[bool] = None,
+    limit: int = 20,
+    current_user: User = Depends(get_current_user)
+):
+    """Search users with filters"""
+    # Build search query
+    search_filter = {}
+    
+    if query:
+        search_filter["$or"] = [
+            {"full_name": {"$regex": query, "$options": "i"}},
+            {"email": {"$regex": query, "$options": "i"}},
+            {"department": {"$regex": query, "$options": "i"}}
+        ]
+    
+    if role:
+        search_filter["role"] = role
+    
+    if college:
+        search_filter["college"] = {"$regex": college, "$options": "i"}
+    
+    if graduation_year:
+        search_filter["graduation_year"] = graduation_year
+    
+    # Get users
+    users_cursor = db.users.find(search_filter, {"_id": 0, "password_hash": 0}).limit(limit)
+    users = await users_cursor.to_list(length=limit)
+    
+    # Get profiles for these users
+    user_ids = [u["id"] for u in users]
+    profiles_cursor = db.profiles.find({"user_id": {"$in": user_ids}}, {"_id": 0})
+    profiles = await profiles_cursor.to_list(length=limit)
+    
+    # Create profile lookup
+    profile_map = {p["user_id"]: p for p in profiles}
+    
+    # Build results
+    results = []
+    for user in users:
+        profile = profile_map.get(user["id"], {})
+        
+        # Apply profile filters
+        if skills and skills not in profile.get("skills", []):
+            continue
+        
+        if available_for_mentorship is not None and profile.get("available_for_mentorship", False) != available_for_mentorship:
+            continue
+        
+        result = UserSearchResult(
+            id=user["id"],
+            full_name=user["full_name"],
+            email=user["email"],
+            role=user["role"],
+            college=user["college"],
+            graduation_year=user.get("graduation_year"),
+            department=user.get("department"),
+            headline=profile.get("headline"),
+            profile_picture=profile.get("profile_picture"),
+            skills=profile.get("skills", []),
+            available_for_mentorship=profile.get("available_for_mentorship", False)
+        )
+        results.append(result)
+    
+    return results
+
 @api_router.get("/")
 async def root():
     return {"message": "CAMPUS-BRIDGE API v1.0"}
