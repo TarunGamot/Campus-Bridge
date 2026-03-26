@@ -1337,6 +1337,346 @@ async def get_mentorship_status(
         "is_student": mentorship["student_id"] == current_user.id
     }
 
+# ============= JOB & APPLICATION MODELS =============
+
+class JobType(str, Enum):
+    FULL_TIME = "full-time"
+    PART_TIME = "part-time"
+    INTERNSHIP = "internship"
+    CONTRACT = "contract"
+
+class ApplicationStatus(str, Enum):
+    APPLIED = "applied"
+    UNDER_REVIEW = "under_review"
+    SHORTLISTED = "shortlisted"
+    REJECTED = "rejected"
+    ACCEPTED = "accepted"
+
+class JobCreate(BaseModel):
+    title: str
+    company: str
+    location: str
+    job_type: JobType
+    description: str
+    requirements: Optional[str] = None
+    responsibilities: Optional[str] = None
+    salary_range: Optional[str] = None
+    experience_level: Optional[str] = None
+    application_deadline: Optional[str] = None
+    skills_required: List[str] = []
+    category: Optional[str] = None
+
+class Job(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    title: str
+    company: str
+    location: str
+    job_type: JobType
+    description: str
+    requirements: Optional[str] = None
+    responsibilities: Optional[str] = None
+    salary_range: Optional[str] = None
+    experience_level: Optional[str] = None
+    posted_by: str  # admin user id
+    posted_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    application_deadline: Optional[str] = None
+    is_active: bool = True
+    skills_required: List[str] = []
+    category: Optional[str] = None
+
+class JobApplication(BaseModel):
+    job_id: str
+    cover_letter: str
+    resume_url: Optional[str] = None
+
+class Application(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    job_id: str
+    applicant_id: str
+    status: ApplicationStatus = ApplicationStatus.APPLIED
+    cover_letter: str
+    resume_url: Optional[str] = None
+    applied_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class ApplicationWithJob(BaseModel):
+    """Application with job details"""
+    application: Application
+    job: Job
+
+class ApplicationWithUser(BaseModel):
+    """Application with applicant details"""
+    application: Application
+    user: UserSearchResult
+
+# ============= JOB ROUTES =============
+
+@api_router.post("/jobs", response_model=Job)
+async def create_job(
+    job_data: JobCreate,
+    current_user: User = Depends(get_current_user)
+):
+    """Create a job posting (admin only)"""
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Only admins can create job postings")
+    
+    # Create job
+    job = Job(
+        **job_data.model_dump(),
+        posted_by=current_user.id
+    )
+    
+    doc = job.model_dump()
+    doc['posted_at'] = doc['posted_at'].isoformat()
+    
+    await db.jobs.insert_one(doc)
+    
+    return job
+
+@api_router.put("/jobs/{job_id}", response_model=Job)
+async def update_job(
+    job_id: str,
+    job_data: JobCreate,
+    current_user: User = Depends(get_current_user)
+):
+    """Update a job posting (admin only)"""
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Only admins can update job postings")
+    
+    job_doc = await db.jobs.find_one({"id": job_id}, {"_id": 0})
+    if not job_doc:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    # Update job
+    update_data = job_data.model_dump()
+    await db.jobs.update_one(
+        {"id": job_id},
+        {"$set": update_data}
+    )
+    
+    # Get updated job
+    updated_doc = await db.jobs.find_one({"id": job_id}, {"_id": 0})
+    if isinstance(updated_doc.get('posted_at'), str):
+        updated_doc['posted_at'] = datetime.fromisoformat(updated_doc['posted_at'])
+    
+    return Job(**updated_doc)
+
+@api_router.delete("/jobs/{job_id}")
+async def delete_job(
+    job_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Delete a job posting (admin only)"""
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Only admins can delete job postings")
+    
+    result = await db.jobs.delete_one({"id": job_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    return {"message": "Job deleted successfully"}
+
+@api_router.get("/jobs", response_model=List[Job])
+async def get_jobs(
+    job_type: Optional[JobType] = None,
+    category: Optional[str] = None,
+    location: Optional[str] = None,
+    query: Optional[str] = None,
+    limit: int = 50,
+    current_user: User = Depends(get_current_user)
+):
+    """Get all active jobs with filters"""
+    # Build query
+    search_filter = {"is_active": True}
+    
+    if job_type:
+        search_filter["job_type"] = job_type
+    
+    if category:
+        search_filter["category"] = {"$regex": category, "$options": "i"}
+    
+    if location:
+        search_filter["location"] = {"$regex": location, "$options": "i"}
+    
+    if query:
+        search_filter["$or"] = [
+            {"title": {"$regex": query, "$options": "i"}},
+            {"company": {"$regex": query, "$options": "i"}},
+            {"description": {"$regex": query, "$options": "i"}}
+        ]
+    
+    # Get jobs
+    jobs_cursor = db.jobs.find(search_filter, {"_id": 0}).limit(limit).sort("posted_at", -1)
+    jobs = await jobs_cursor.to_list(length=limit)
+    
+    # Convert datetime strings
+    for job in jobs:
+        if isinstance(job.get('posted_at'), str):
+            job['posted_at'] = datetime.fromisoformat(job['posted_at'])
+    
+    return [Job(**job) for job in jobs]
+
+@api_router.get("/jobs/{job_id}", response_model=Job)
+async def get_job(
+    job_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Get job details"""
+    job_doc = await db.jobs.find_one({"id": job_id}, {"_id": 0})
+    if not job_doc:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    if isinstance(job_doc.get('posted_at'), str):
+        job_doc['posted_at'] = datetime.fromisoformat(job_doc['posted_at'])
+    
+    return Job(**job_doc)
+
+@api_router.post("/jobs/{job_id}/apply", response_model=Application)
+async def apply_for_job(
+    job_id: str,
+    application_data: JobApplication,
+    current_user: User = Depends(get_current_user)
+):
+    """Apply for a job"""
+    # Check if job exists
+    job_doc = await db.jobs.find_one({"id": job_id, "is_active": True}, {"_id": 0})
+    if not job_doc:
+        raise HTTPException(status_code=404, detail="Job not found or inactive")
+    
+    # Check if already applied
+    existing = await db.applications.find_one({
+        "job_id": job_id,
+        "applicant_id": current_user.id
+    })
+    if existing:
+        raise HTTPException(status_code=400, detail="You have already applied for this job")
+    
+    # Create application
+    application = Application(
+        job_id=job_id,
+        applicant_id=current_user.id,
+        cover_letter=application_data.cover_letter,
+        resume_url=application_data.resume_url
+    )
+    
+    doc = application.model_dump()
+    doc['applied_at'] = doc['applied_at'].isoformat()
+    doc['updated_at'] = doc['updated_at'].isoformat()
+    
+    await db.applications.insert_one(doc)
+    
+    return application
+
+@api_router.get("/applications/my", response_model=List[ApplicationWithJob])
+async def get_my_applications(current_user: User = Depends(get_current_user)):
+    """Get user's job applications"""
+    applications_cursor = db.applications.find(
+        {"applicant_id": current_user.id},
+        {"_id": 0}
+    ).sort("applied_at", -1)
+    applications = await applications_cursor.to_list(length=100)
+    
+    results = []
+    for app in applications:
+        # Get job details
+        job_doc = await db.jobs.find_one({"id": app["job_id"]}, {"_id": 0})
+        if not job_doc:
+            continue
+        
+        # Convert datetime strings
+        if isinstance(app.get('applied_at'), str):
+            app['applied_at'] = datetime.fromisoformat(app['applied_at'])
+        if isinstance(app.get('updated_at'), str):
+            app['updated_at'] = datetime.fromisoformat(app['updated_at'])
+        
+        if isinstance(job_doc.get('posted_at'), str):
+            job_doc['posted_at'] = datetime.fromisoformat(job_doc['posted_at'])
+        
+        application_obj = Application(**app)
+        job_obj = Job(**job_doc)
+        
+        results.append(ApplicationWithJob(application=application_obj, job=job_obj))
+    
+    return results
+
+@api_router.get("/jobs/{job_id}/applications", response_model=List[ApplicationWithUser])
+async def get_job_applications(
+    job_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Get applications for a job (admin only)"""
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Only admins can view job applications")
+    
+    applications_cursor = db.applications.find(
+        {"job_id": job_id},
+        {"_id": 0}
+    ).sort("applied_at", -1)
+    applications = await applications_cursor.to_list(length=100)
+    
+    results = []
+    for app in applications:
+        # Get applicant details
+        user_doc = await db.users.find_one({"id": app["applicant_id"]}, {"_id": 0, "password_hash": 0})
+        if not user_doc:
+            continue
+        
+        profile_doc = await db.profiles.find_one({"user_id": app["applicant_id"]}, {"_id": 0})
+        profile = profile_doc if profile_doc else {}
+        
+        # Convert datetime strings
+        if isinstance(app.get('applied_at'), str):
+            app['applied_at'] = datetime.fromisoformat(app['applied_at'])
+        if isinstance(app.get('updated_at'), str):
+            app['updated_at'] = datetime.fromisoformat(app['updated_at'])
+        
+        application_obj = Application(**app)
+        
+        user_result = UserSearchResult(
+            id=user_doc["id"],
+            full_name=user_doc["full_name"],
+            email=user_doc["email"],
+            role=user_doc["role"],
+            college=user_doc["college"],
+            graduation_year=user_doc.get("graduation_year"),
+            department=user_doc.get("department"),
+            headline=profile.get("headline"),
+            profile_picture=profile.get("profile_picture"),
+            skills=profile.get("skills", []),
+            available_for_mentorship=profile.get("available_for_mentorship", False)
+        )
+        
+        results.append(ApplicationWithUser(application=application_obj, user=user_result))
+    
+    return results
+
+@api_router.put("/applications/{application_id}/status")
+async def update_application_status(
+    application_id: str,
+    status: ApplicationStatus,
+    current_user: User = Depends(get_current_user)
+):
+    """Update application status (admin only)"""
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Only admins can update application status")
+    
+    result = await db.applications.update_one(
+        {"id": application_id},
+        {"$set": {
+            "status": status,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Application not found")
+    
+    return {"message": "Application status updated"}
+
 @api_router.get("/")
 async def root():
     return {"message": "CAMPUS-BRIDGE API v1.0"}

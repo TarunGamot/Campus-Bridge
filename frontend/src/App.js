@@ -11,6 +11,9 @@ import UserSearch from "./pages/UserSearch";
 import Connections from "./pages/Connections";
 import FindMentors from "./pages/FindMentors";
 import Mentorships from "./pages/Mentorships";
+import Jobs from "./pages/Jobs";
+import JobDetail from "./pages/JobDetail";
+import MyApplications from "./pages/MyApplications";
 
 function App() {
   return (
@@ -20,62 +23,16 @@ function App() {
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
-          <Route 
-            path="/dashboard" 
-            element={
-              <ProtectedRoute>
-                <Dashboard />
-              </ProtectedRoute>
-            } 
-          />
-          <Route 
-            path="/profile/:userId" 
-            element={
-              <ProtectedRoute>
-                <ProfileView />
-              </ProtectedRoute>
-            } 
-          />
-          <Route 
-            path="/profile/edit" 
-            element={
-              <ProtectedRoute>
-                <ProfileEdit />
-              </ProtectedRoute>
-            } 
-          />
-          <Route 
-            path="/search" 
-            element={
-              <ProtectedRoute>
-                <UserSearch />
-              </ProtectedRoute>
-            } 
-          />
-          <Route 
-            path="/connections" 
-            element={
-              <ProtectedRoute>
-                <Connections />
-              </ProtectedRoute>
-            } 
-          />
-          <Route 
-            path="/find-mentors" 
-            element={
-              <ProtectedRoute>
-                <FindMentors />
-              </ProtectedRoute>
-            } 
-          />
-          <Route 
-            path="/mentorships" 
-            element={
-              <ProtectedRoute>
-                <Mentorships />
-              </ProtectedRoute>
-            } 
-          />
+          <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+          <Route path="/profile/:userId" element={<ProtectedRoute><ProfileView /></ProtectedRoute>} />
+          <Route path="/profile/edit" element={<ProtectedRoute><ProfileEdit /></ProtectedRoute>} />
+          <Route path="/search" element={<ProtectedRoute><UserSearch /></ProtectedRoute>} />
+          <Route path="/connections" element={<ProtectedRoute><Connections /></ProtectedRoute>} />
+          <Route path="/find-mentors" element={<ProtectedRoute><FindMentors /></ProtectedRoute>} />
+          <Route path="/mentorships" element={<ProtectedRoute><Mentorships /></ProtectedRoute>} />
+          <Route path="/jobs" element={<ProtectedRoute><Jobs /></ProtectedRoute>} />
+          <Route path="/jobs/:jobId" element={<ProtectedRoute><JobDetail /></ProtectedRoute>} />
+          <Route path="/applications" element={<ProtectedRoute><MyApplications /></ProtectedRoute>} />
         </Routes>
       </BrowserRouter>
     </AuthProvider>
