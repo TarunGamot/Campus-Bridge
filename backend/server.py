@@ -898,6 +898,445 @@ async def get_connection_suggestions(
     
     return results
 
+# ============= MENTORSHIP MODELS =============
+
+class MentorshipStatus(str, Enum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    COMPLETED = "completed"
+
+class MentorshipRequest(BaseModel):
+    mentor_id: str
+    goals: str
+    message: Optional[str] = None
+
+class Mentorship(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    student_id: str
+    mentor_id: str
+    status: MentorshipStatus = MentorshipStatus.PENDING
+    goals: str
+    message: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class MentorshipWithUser(BaseModel):
+    """Mentorship with user details"""
+    mentorship: Mentorship
+    user: UserSearchResult
+
+# ============= MENTORSHIP ROUTES =============
+
+@api_router.post("/mentorship/request", response_model=Mentorship)
+async def send_mentorship_request(
+    request: MentorshipRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """Send a mentorship request to a mentor"""
+    # Only students can request mentorship
+    if current_user.role != UserRole.STUDENT:
+        raise HTTPException(status_code=403, detail="Only students can request mentorship")
+    
+    # Check if mentor exists and is alumni
+    mentor = await db.users.find_one({"id": request.mentor_id}, {"_id": 0})
+    if not mentor:
+        raise HTTPException(status_code=404, detail="Mentor not found")
+    
+    if mentor["role"] != UserRole.ALUMNI:
+        raise HTTPException(status_code=400, detail="Mentorship can only be requested from alumni")
+    
+    # Check if mentor is available
+    mentor_profile = await db.profiles.find_one({"user_id": request.mentor_id}, {"_id": 0})
+    if not mentor_profile or not mentor_profile.get("available_for_mentorship", False):
+        raise HTTPException(status_code=400, detail="This alumni is not available for mentorship")
+    
+    # Can't request mentorship from yourself
+    if request.mentor_id == current_user.id:
+        raise HTTPException(status_code=400, detail="Cannot request mentorship from yourself")
+    
+    # Check if mentorship request already exists
+    existing = await db.mentorships.find_one({
+        "student_id": current_user.id,
+        "mentor_id": request.mentor_id,
+        "status": {"$in": ["pending", "accepted"]}
+    })
+    
+    if existing:
+        raise HTTPException(status_code=400, detail="Mentorship request already exists")
+    
+    # Create mentorship request
+    mentorship = Mentorship(
+        student_id=current_user.id,
+        mentor_id=request.mentor_id,
+        goals=request.goals,
+        message=request.message
+    )
+    
+    doc = mentorship.model_dump()
+    doc['created_at'] = doc['created_at'].isoformat()
+    doc['updated_at'] = doc['updated_at'].isoformat()
+    
+    await db.mentorships.insert_one(doc)
+    
+    return mentorship
+
+@api_router.put("/mentorship/{mentorship_id}/accept", response_model=Mentorship)
+async def accept_mentorship(
+    mentorship_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Accept a mentorship request"""
+    mentorship_doc = await db.mentorships.find_one({"id": mentorship_id}, {"_id": 0})
+    
+    if not mentorship_doc:
+        raise HTTPException(status_code=404, detail="Mentorship request not found")
+    
+    # Only mentor can accept
+    if mentorship_doc["mentor_id"] != current_user.id:
+        raise HTTPException(status_code=403, detail="You can only accept mentorship requests sent to you")
+    
+    # Update status
+    await db.mentorships.update_one(
+        {"id": mentorship_id},
+        {"$set": {
+            "status": MentorshipStatus.ACCEPTED,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }}
+    )
+    
+    # Get updated mentorship
+    updated_doc = await db.mentorships.find_one({"id": mentorship_id}, {"_id": 0})
+    if isinstance(updated_doc.get('created_at'), str):
+        updated_doc['created_at'] = datetime.fromisoformat(updated_doc['created_at'])
+    if isinstance(updated_doc.get('updated_at'), str):
+        updated_doc['updated_at'] = datetime.fromisoformat(updated_doc['updated_at'])
+    
+    return Mentorship(**updated_doc)
+
+@api_router.put("/mentorship/{mentorship_id}/reject", response_model=Mentorship)
+async def reject_mentorship(
+    mentorship_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Reject a mentorship request"""
+    mentorship_doc = await db.mentorships.find_one({"id": mentorship_id}, {"_id": 0})
+    
+    if not mentorship_doc:
+        raise HTTPException(status_code=404, detail="Mentorship request not found")
+    
+    # Only mentor can reject
+    if mentorship_doc["mentor_id"] != current_user.id:
+        raise HTTPException(status_code=403, detail="You can only reject mentorship requests sent to you")
+    
+    # Update status
+    await db.mentorships.update_one(
+        {"id": mentorship_id},
+        {"$set": {
+            "status": MentorshipStatus.REJECTED,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }}
+    )
+    
+    # Get updated mentorship
+    updated_doc = await db.mentorships.find_one({"id": mentorship_id}, {"_id": 0})
+    if isinstance(updated_doc.get('created_at'), str):
+        updated_doc['created_at'] = datetime.fromisoformat(updated_doc['created_at'])
+    if isinstance(updated_doc.get('updated_at'), str):
+        updated_doc['updated_at'] = datetime.fromisoformat(updated_doc['updated_at'])
+    
+    return Mentorship(**updated_doc)
+
+@api_router.put("/mentorship/{mentorship_id}/complete", response_model=Mentorship)
+async def complete_mentorship(
+    mentorship_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Mark mentorship as completed"""
+    mentorship_doc = await db.mentorships.find_one({"id": mentorship_id}, {"_id": 0})
+    
+    if not mentorship_doc:
+        raise HTTPException(status_code=404, detail="Mentorship not found")
+    
+    # Both student and mentor can mark as completed
+    if mentorship_doc["student_id"] != current_user.id and mentorship_doc["mentor_id"] != current_user.id:
+        raise HTTPException(status_code=403, detail="You can only complete your own mentorships")
+    
+    # Update status
+    await db.mentorships.update_one(
+        {"id": mentorship_id},
+        {"$set": {
+            "status": MentorshipStatus.COMPLETED,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }}
+    )
+    
+    # Get updated mentorship
+    updated_doc = await db.mentorships.find_one({"id": mentorship_id}, {"_id": 0})
+    if isinstance(updated_doc.get('created_at'), str):
+        updated_doc['created_at'] = datetime.fromisoformat(updated_doc['created_at'])
+    if isinstance(updated_doc.get('updated_at'), str):
+        updated_doc['updated_at'] = datetime.fromisoformat(updated_doc['updated_at'])
+    
+    return Mentorship(**updated_doc)
+
+@api_router.delete("/mentorship/{mentorship_id}")
+async def cancel_mentorship(
+    mentorship_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Cancel/remove a mentorship"""
+    mentorship_doc = await db.mentorships.find_one({"id": mentorship_id}, {"_id": 0})
+    
+    if not mentorship_doc:
+        raise HTTPException(status_code=404, detail="Mentorship not found")
+    
+    # Only participants can cancel
+    if mentorship_doc["student_id"] != current_user.id and mentorship_doc["mentor_id"] != current_user.id:
+        raise HTTPException(status_code=403, detail="You can only cancel your own mentorships")
+    
+    await db.mentorships.delete_one({"id": mentorship_id})
+    
+    return {"message": "Mentorship cancelled"}
+
+@api_router.get("/mentorship/requests/received", response_model=List[MentorshipWithUser])
+async def get_received_mentorship_requests(current_user: User = Depends(get_current_user)):
+    """Get mentorship requests received (for mentors)"""
+    mentorships_cursor = db.mentorships.find({
+        "mentor_id": current_user.id,
+        "status": MentorshipStatus.PENDING
+    }, {"_id": 0})
+    mentorships = await mentorships_cursor.to_list(length=100)
+    
+    results = []
+    for mentorship in mentorships:
+        # Get student info
+        user_doc = await db.users.find_one({"id": mentorship["student_id"]}, {"_id": 0, "password_hash": 0})
+        if not user_doc:
+            continue
+        
+        profile_doc = await db.profiles.find_one({"user_id": mentorship["student_id"]}, {"_id": 0})
+        profile = profile_doc if profile_doc else {}
+        
+        if isinstance(mentorship.get('created_at'), str):
+            mentorship['created_at'] = datetime.fromisoformat(mentorship['created_at'])
+        if isinstance(mentorship.get('updated_at'), str):
+            mentorship['updated_at'] = datetime.fromisoformat(mentorship['updated_at'])
+        
+        mentorship_obj = Mentorship(**mentorship)
+        
+        user_result = UserSearchResult(
+            id=user_doc["id"],
+            full_name=user_doc["full_name"],
+            email=user_doc["email"],
+            role=user_doc["role"],
+            college=user_doc["college"],
+            graduation_year=user_doc.get("graduation_year"),
+            department=user_doc.get("department"),
+            headline=profile.get("headline"),
+            profile_picture=profile.get("profile_picture"),
+            skills=profile.get("skills", []),
+            available_for_mentorship=profile.get("available_for_mentorship", False)
+        )
+        
+        results.append(MentorshipWithUser(mentorship=mentorship_obj, user=user_result))
+    
+    return results
+
+@api_router.get("/mentorship/requests/sent", response_model=List[MentorshipWithUser])
+async def get_sent_mentorship_requests(current_user: User = Depends(get_current_user)):
+    """Get mentorship requests sent (for students)"""
+    mentorships_cursor = db.mentorships.find({
+        "student_id": current_user.id,
+        "status": MentorshipStatus.PENDING
+    }, {"_id": 0})
+    mentorships = await mentorships_cursor.to_list(length=100)
+    
+    results = []
+    for mentorship in mentorships:
+        # Get mentor info
+        user_doc = await db.users.find_one({"id": mentorship["mentor_id"]}, {"_id": 0, "password_hash": 0})
+        if not user_doc:
+            continue
+        
+        profile_doc = await db.profiles.find_one({"user_id": mentorship["mentor_id"]}, {"_id": 0})
+        profile = profile_doc if profile_doc else {}
+        
+        if isinstance(mentorship.get('created_at'), str):
+            mentorship['created_at'] = datetime.fromisoformat(mentorship['created_at'])
+        if isinstance(mentorship.get('updated_at'), str):
+            mentorship['updated_at'] = datetime.fromisoformat(mentorship['updated_at'])
+        
+        mentorship_obj = Mentorship(**mentorship)
+        
+        user_result = UserSearchResult(
+            id=user_doc["id"],
+            full_name=user_doc["full_name"],
+            email=user_doc["email"],
+            role=user_doc["role"],
+            college=user_doc["college"],
+            graduation_year=user_doc.get("graduation_year"),
+            department=user_doc.get("department"),
+            headline=profile.get("headline"),
+            profile_picture=profile.get("profile_picture"),
+            skills=profile.get("skills", []),
+            available_for_mentorship=profile.get("available_for_mentorship", False)
+        )
+        
+        results.append(MentorshipWithUser(mentorship=mentorship_obj, user=user_result))
+    
+    return results
+
+@api_router.get("/mentorship/active", response_model=List[MentorshipWithUser])
+async def get_active_mentorships(current_user: User = Depends(get_current_user)):
+    """Get active mentorships (as mentor or mentee)"""
+    mentorships_cursor = db.mentorships.find({
+        "$or": [
+            {"student_id": current_user.id},
+            {"mentor_id": current_user.id}
+        ],
+        "status": MentorshipStatus.ACCEPTED
+    }, {"_id": 0})
+    mentorships = await mentorships_cursor.to_list(length=100)
+    
+    results = []
+    for mentorship in mentorships:
+        # Determine the other user
+        other_user_id = mentorship["mentor_id"] if mentorship["student_id"] == current_user.id else mentorship["student_id"]
+        
+        # Get user info
+        user_doc = await db.users.find_one({"id": other_user_id}, {"_id": 0, "password_hash": 0})
+        if not user_doc:
+            continue
+        
+        profile_doc = await db.profiles.find_one({"user_id": other_user_id}, {"_id": 0})
+        profile = profile_doc if profile_doc else {}
+        
+        if isinstance(mentorship.get('created_at'), str):
+            mentorship['created_at'] = datetime.fromisoformat(mentorship['created_at'])
+        if isinstance(mentorship.get('updated_at'), str):
+            mentorship['updated_at'] = datetime.fromisoformat(mentorship['updated_at'])
+        
+        mentorship_obj = Mentorship(**mentorship)
+        
+        user_result = UserSearchResult(
+            id=user_doc["id"],
+            full_name=user_doc["full_name"],
+            email=user_doc["email"],
+            role=user_doc["role"],
+            college=user_doc["college"],
+            graduation_year=user_doc.get("graduation_year"),
+            department=user_doc.get("department"),
+            headline=profile.get("headline"),
+            profile_picture=profile.get("profile_picture"),
+            skills=profile.get("skills", []),
+            available_for_mentorship=profile.get("available_for_mentorship", False)
+        )
+        
+        results.append(MentorshipWithUser(mentorship=mentorship_obj, user=user_result))
+    
+    return results
+
+@api_router.get("/mentorship/find-mentors", response_model=List[UserSearchResult])
+async def find_mentors(
+    query: Optional[str] = None,
+    college: Optional[str] = None,
+    department: Optional[str] = None,
+    skills: Optional[str] = None,
+    limit: int = 20,
+    current_user: User = Depends(get_current_user)
+):
+    """Find available mentors"""
+    # Build search query for alumni only
+    search_filter = {"role": UserRole.ALUMNI}
+    
+    if query:
+        search_filter["$or"] = [
+            {"full_name": {"$regex": query, "$options": "i"}},
+            {"department": {"$regex": query, "$options": "i"}}
+        ]
+    
+    if college:
+        search_filter["college"] = {"$regex": college, "$options": "i"}
+    
+    if department:
+        search_filter["department"] = {"$regex": department, "$options": "i"}
+    
+    # Get users
+    users_cursor = db.users.find(search_filter, {"_id": 0, "password_hash": 0}).limit(limit)
+    users = await users_cursor.to_list(length=limit)
+    
+    # Get profiles for these users (only those available for mentorship)
+    user_ids = [u["id"] for u in users]
+    profiles_cursor = db.profiles.find({
+        "user_id": {"$in": user_ids},
+        "available_for_mentorship": True
+    }, {"_id": 0})
+    profiles = await profiles_cursor.to_list(length=limit)
+    
+    # Create profile lookup
+    profile_map = {p["user_id"]: p for p in profiles}
+    
+    # Build results (only include users available for mentorship)
+    results = []
+    for user in users:
+        profile = profile_map.get(user["id"])
+        if not profile:  # Skip if not available for mentorship
+            continue
+        
+        # Apply skill filter if provided
+        if skills and skills not in profile.get("skills", []):
+            continue
+        
+        result = UserSearchResult(
+            id=user["id"],
+            full_name=user["full_name"],
+            email=user["email"],
+            role=user["role"],
+            college=user["college"],
+            graduation_year=user.get("graduation_year"),
+            department=user.get("department"),
+            headline=profile.get("headline"),
+            profile_picture=profile.get("profile_picture"),
+            skills=profile.get("skills", []),
+            available_for_mentorship=True
+        )
+        results.append(result)
+    
+    return results
+
+@api_router.get("/mentorship/status/{user_id}")
+async def get_mentorship_status(
+    user_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Check mentorship status with a specific user"""
+    # Check if mentorship exists
+    mentorship = await db.mentorships.find_one({
+        "$or": [
+            {"student_id": current_user.id, "mentor_id": user_id},
+            {"student_id": user_id, "mentor_id": current_user.id}
+        ],
+        "status": {"$in": ["pending", "accepted"]}
+    }, {"_id": 0})
+    
+    if not mentorship:
+        return {"status": "none", "mentorship": None}
+    
+    # Convert datetime strings
+    if isinstance(mentorship.get('created_at'), str):
+        mentorship['created_at'] = datetime.fromisoformat(mentorship['created_at'])
+    if isinstance(mentorship.get('updated_at'), str):
+        mentorship['updated_at'] = datetime.fromisoformat(mentorship['updated_at'])
+    
+    return {
+        "status": mentorship["status"],
+        "mentorship": Mentorship(**mentorship),
+        "is_student": mentorship["student_id"] == current_user.id
+    }
+
 @api_router.get("/")
 async def root():
     return {"message": "CAMPUS-BRIDGE API v1.0"}

@@ -9,6 +9,8 @@ import ProfileView from "./pages/ProfileView";
 import ProfileEdit from "./pages/ProfileEdit";
 import UserSearch from "./pages/UserSearch";
 import Connections from "./pages/Connections";
+import FindMentors from "./pages/FindMentors";
+import Mentorships from "./pages/Mentorships";
 
 function App() {
   return (
@@ -55,6 +57,22 @@ function App() {
             element={
               <ProtectedRoute>
                 <Connections />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/find-mentors" 
+            element={
+              <ProtectedRoute>
+                <FindMentors />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/mentorships" 
+            element={
+              <ProtectedRoute>
+                <Mentorships />
               </ProtectedRoute>
             } 
           />
