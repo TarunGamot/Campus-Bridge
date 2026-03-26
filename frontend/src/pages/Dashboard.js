@@ -163,19 +163,28 @@ const Dashboard = () => {
               <p className="text-sm font-medium text-gray-600 group-hover:text-blue-600">Find Alumni</p>
             </button>
             
-            <button className="p-4 border-2 border-dashed border-gray-300 rounded-lg hover:border-purple-500 hover:bg-purple-50 transition-all group">
+            <button 
+              onClick={() => navigate('/jobs')}
+              className="p-4 border-2 border-dashed border-gray-300 rounded-lg hover:border-purple-500 hover:bg-purple-50 transition-all group"
+            >
               <Briefcase className="w-8 h-8 text-gray-400 group-hover:text-purple-600 mx-auto mb-2" />
               <p className="text-sm font-medium text-gray-600 group-hover:text-purple-600">Browse Jobs</p>
             </button>
             
-            <button className="p-4 border-2 border-dashed border-gray-300 rounded-lg hover:border-pink-500 hover:bg-pink-50 transition-all group">
+            <button 
+              onClick={() => navigate('/find-mentors')}
+              className="p-4 border-2 border-dashed border-gray-300 rounded-lg hover:border-pink-500 hover:bg-pink-50 transition-all group"
+            >
               <BookOpen className="w-8 h-8 text-gray-400 group-hover:text-pink-600 mx-auto mb-2" />
-              <p className="text-sm font-medium text-gray-600 group-hover:text-pink-600">Write Post</p>
+              <p className="text-sm font-medium text-gray-600 group-hover:text-pink-600">Find Mentors</p>
             </button>
             
-            <button className="p-4 border-2 border-dashed border-gray-300 rounded-lg hover:border-green-500 hover:bg-green-50 transition-all group">
+            <button 
+              onClick={() => navigate('/mentorships')}
+              className="p-4 border-2 border-dashed border-gray-300 rounded-lg hover:border-green-500 hover:bg-green-50 transition-all group"
+            >
               <Calendar className="w-8 h-8 text-gray-400 group-hover:text-green-600 mx-auto mb-2" />
-              <p className="text-sm font-medium text-gray-600 group-hover:text-green-600">View Events</p>
+              <p className="text-sm font-medium text-gray-600 group-hover:text-green-600">My Mentorships</p>
             </button>
           </div>
         </div>
