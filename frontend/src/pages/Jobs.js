@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import axios from 'axios';
-import { Search, Filter, Briefcase, MapPin, Clock, DollarSign, Building, ChevronRight } from 'lucide-react';
+import { Search, Filter, Briefcase, MapPin, Clock, DollarSign, Building, ChevronRight, Home } from 'lucide-react';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -70,14 +70,23 @@ const Jobs = () => {
             <h1 className="text-3xl font-bold text-gray-800 mb-2">Job & Internship Board</h1>
             <p className="text-gray-600">Find verified opportunities from your network</p>
           </div>
-          {user?.role === 'admin' && (
+          <div className="flex items-center gap-3">
             <button
-              onClick={() => navigate('/jobs/post')}
-              className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+              onClick={() => navigate('/dashboard')}
+              className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 flex items-center gap-2"
             >
-              Post a Job
+              <Home className="w-5 h-5" />
+              Dashboard
             </button>
-          )}
+            {user?.role === 'admin' && (
+              <button
+                onClick={() => navigate('/jobs/post')}
+                className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+              >
+                Post a Job
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Search & Filters */}
