@@ -2051,6 +2051,396 @@ async def get_my_posts(current_user: User = Depends(get_current_user)):
     
     return results
 
+# ============= EVENT MANAGEMENT MODELS =============
+
+class EventType(str, Enum):
+    WORKSHOP = "workshop"
+    SEMINAR = "seminar"
+    NETWORKING = "networking"
+    SOCIAL = "social"
+    CAREER_FAIR = "career_fair"
+
+class RSVPStatus(str, Enum):
+    GOING = "going"
+    MAYBE = "maybe"
+    NOT_GOING = "not_going"
+
+class EventCreate(BaseModel):
+    title: str
+    description: str
+    event_type: EventType
+    date: str
+    time: str
+    location: str
+    is_virtual: bool = False
+    meeting_link: Optional[str] = None
+    max_attendees: Optional[int] = None
+
+class Event(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    organizer_id: str
+    title: str
+    description: str
+    event_type: EventType
+    date: str
+    time: str
+    location: str
+    is_virtual: bool = False
+    meeting_link: Optional[str] = None
+    max_attendees: Optional[int] = None
+    attendee_count: int = 0
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class EventWithOrganizer(BaseModel):
+    """Event with organizer details"""
+    event: Event
+    organizer: UserSearchResult
+    user_rsvp: Optional[RSVPStatus] = None
+    is_full: bool = False
+
+class RSVPCreate(BaseModel):
+    status: RSVPStatus
+
+class RSVP(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    event_id: str
+    user_id: str
+    status: RSVPStatus
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class AttendeeInfo(BaseModel):
+    """Attendee with RSVP status"""
+    user: UserSearchResult
+    rsvp_status: RSVPStatus
+
+# ============= EVENT ROUTES =============
+
+@api_router.post("/events", response_model=Event)
+async def create_event(
+    event_data: EventCreate,
+    current_user: User = Depends(get_current_user)
+):
+    """Create an event (alumni/admin only)"""
+    if current_user.role not in [UserRole.ALUMNI, UserRole.ADMIN]:
+        raise HTTPException(status_code=403, detail="Only alumni and admins can create events")
+    
+    event = Event(
+        **event_data.model_dump(),
+        organizer_id=current_user.id
+    )
+    
+    doc = event.model_dump()
+    doc['created_at'] = doc['created_at'].isoformat()
+    doc['updated_at'] = doc['updated_at'].isoformat()
+    
+    await db.events.insert_one(doc)
+    
+    return event
+
+@api_router.put("/events/{event_id}", response_model=Event)
+async def update_event(
+    event_id: str,
+    event_data: EventCreate,
+    current_user: User = Depends(get_current_user)
+):
+    """Update an event"""
+    event_doc = await db.events.find_one({"id": event_id}, {"_id": 0})
+    if not event_doc:
+        raise HTTPException(status_code=404, detail="Event not found")
+    
+    if event_doc["organizer_id"] != current_user.id and current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="You can only edit your own events")
+    
+    update_data = event_data.model_dump()
+    update_data['updated_at'] = datetime.now(timezone.utc).isoformat()
+    
+    await db.events.update_one({"id": event_id}, {"$set": update_data})
+    
+    updated_doc = await db.events.find_one({"id": event_id}, {"_id": 0})
+    if isinstance(updated_doc.get('created_at'), str):
+        updated_doc['created_at'] = datetime.fromisoformat(updated_doc['created_at'])
+    if isinstance(updated_doc.get('updated_at'), str):
+        updated_doc['updated_at'] = datetime.fromisoformat(updated_doc['updated_at'])
+    
+    return Event(**updated_doc)
+
+@api_router.delete("/events/{event_id}")
+async def delete_event(
+    event_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Delete an event"""
+    event_doc = await db.events.find_one({"id": event_id}, {"_id": 0})
+    if not event_doc:
+        raise HTTPException(status_code=404, detail="Event not found")
+    
+    if event_doc["organizer_id"] != current_user.id and current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="You can only delete your own events")
+    
+    await db.events.delete_one({"id": event_id})
+    await db.rsvps.delete_many({"event_id": event_id})
+    
+    return {"message": "Event deleted"}
+
+@api_router.get("/events", response_model=List[EventWithOrganizer])
+async def get_events(
+    event_type: Optional[EventType] = None,
+    upcoming_only: bool = True,
+    limit: int = 50,
+    current_user: User = Depends(get_current_user)
+):
+    """Get events"""
+    search_filter = {}
+    
+    if event_type:
+        search_filter["event_type"] = event_type
+    
+    events_cursor = db.events.find(search_filter, {"_id": 0}).limit(limit).sort("date", 1)
+    events = await events_cursor.to_list(length=limit)
+    
+    results = []
+    for event in events:
+        organizer_doc = await db.users.find_one({"id": event["organizer_id"]}, {"_id": 0, "password_hash": 0})
+        if not organizer_doc:
+            continue
+        
+        profile_doc = await db.profiles.find_one({"user_id": event["organizer_id"]}, {"_id": 0})
+        profile = profile_doc if profile_doc else {}
+        
+        if isinstance(event.get('created_at'), str):
+            event['created_at'] = datetime.fromisoformat(event['created_at'])
+        if isinstance(event.get('updated_at'), str):
+            event['updated_at'] = datetime.fromisoformat(event['updated_at'])
+        
+        event_obj = Event(**event)
+        
+        organizer = UserSearchResult(
+            id=organizer_doc["id"],
+            full_name=organizer_doc["full_name"],
+            email=organizer_doc["email"],
+            role=organizer_doc["role"],
+            college=organizer_doc["college"],
+            graduation_year=organizer_doc.get("graduation_year"),
+            department=organizer_doc.get("department"),
+            headline=profile.get("headline"),
+            profile_picture=profile.get("profile_picture"),
+            skills=profile.get("skills", []),
+            available_for_mentorship=profile.get("available_for_mentorship", False)
+        )
+        
+        user_rsvp_doc = await db.rsvps.find_one({"event_id": event["id"], "user_id": current_user.id})
+        user_rsvp = user_rsvp_doc["status"] if user_rsvp_doc else None
+        
+        is_full = event.get("max_attendees") and event.get("attendee_count", 0) >= event.get("max_attendees")
+        
+        results.append(EventWithOrganizer(
+            event=event_obj,
+            organizer=organizer,
+            user_rsvp=user_rsvp,
+            is_full=is_full
+        ))
+    
+    return results
+
+@api_router.get("/events/{event_id}", response_model=EventWithOrganizer)
+async def get_event(
+    event_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Get event details"""
+    event_doc = await db.events.find_one({"id": event_id}, {"_id": 0})
+    if not event_doc:
+        raise HTTPException(status_code=404, detail="Event not found")
+    
+    organizer_doc = await db.users.find_one({"id": event_doc["organizer_id"]}, {"_id": 0, "password_hash": 0})
+    profile_doc = await db.profiles.find_one({"user_id": event_doc["organizer_id"]}, {"_id": 0})
+    profile = profile_doc if profile_doc else {}
+    
+    if isinstance(event_doc.get('created_at'), str):
+        event_doc['created_at'] = datetime.fromisoformat(event_doc['created_at'])
+    if isinstance(event_doc.get('updated_at'), str):
+        event_doc['updated_at'] = datetime.fromisoformat(event_doc['updated_at'])
+    
+    event_obj = Event(**event_doc)
+    
+    organizer = UserSearchResult(
+        id=organizer_doc["id"],
+        full_name=organizer_doc["full_name"],
+        email=organizer_doc["email"],
+        role=organizer_doc["role"],
+        college=organizer_doc["college"],
+        graduation_year=organizer_doc.get("graduation_year"),
+        department=organizer_doc.get("department"),
+        headline=profile.get("headline"),
+        profile_picture=profile.get("profile_picture"),
+        skills=profile.get("skills", []),
+        available_for_mentorship=profile.get("available_for_mentorship", False)
+    )
+    
+    user_rsvp_doc = await db.rsvps.find_one({"event_id": event_id, "user_id": current_user.id})
+    user_rsvp = user_rsvp_doc["status"] if user_rsvp_doc else None
+    
+    is_full = event_doc.get("max_attendees") and event_doc.get("attendee_count", 0) >= event_doc.get("max_attendees")
+    
+    return EventWithOrganizer(
+        event=event_obj,
+        organizer=organizer,
+        user_rsvp=user_rsvp,
+        is_full=is_full
+    )
+
+@api_router.post("/events/{event_id}/rsvp")
+async def rsvp_to_event(
+    event_id: str,
+    rsvp_data: RSVPCreate,
+    current_user: User = Depends(get_current_user)
+):
+    """RSVP to an event"""
+    event = await db.events.find_one({"id": event_id})
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+    
+    # Check if event is full
+    if event.get("max_attendees") and event.get("attendee_count", 0) >= event["max_attendees"] and rsvp_data.status == RSVPStatus.GOING:
+        raise HTTPException(status_code=400, detail="Event is full")
+    
+    existing_rsvp = await db.rsvps.find_one({"event_id": event_id, "user_id": current_user.id})
+    
+    if existing_rsvp:
+        # Update existing RSVP
+        old_status = existing_rsvp["status"]
+        await db.rsvps.update_one(
+            {"event_id": event_id, "user_id": current_user.id},
+            {"$set": {
+                "status": rsvp_data.status,
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }}
+        )
+        
+        # Update attendee count
+        if old_status == RSVPStatus.GOING and rsvp_data.status != RSVPStatus.GOING:
+            await db.events.update_one({"id": event_id}, {"$inc": {"attendee_count": -1}})
+        elif old_status != RSVPStatus.GOING and rsvp_data.status == RSVPStatus.GOING:
+            await db.events.update_one({"id": event_id}, {"$inc": {"attendee_count": 1}})
+        
+        return {"message": "RSVP updated", "status": rsvp_data.status}
+    else:
+        # Create new RSVP
+        rsvp = RSVP(
+            event_id=event_id,
+            user_id=current_user.id,
+            status=rsvp_data.status
+        )
+        
+        doc = rsvp.model_dump()
+        doc['created_at'] = doc['created_at'].isoformat()
+        doc['updated_at'] = doc['updated_at'].isoformat()
+        
+        await db.rsvps.insert_one(doc)
+        
+        # Update attendee count if going
+        if rsvp_data.status == RSVPStatus.GOING:
+            await db.events.update_one({"id": event_id}, {"$inc": {"attendee_count": 1}})
+        
+        return {"message": "RSVP created", "status": rsvp_data.status}
+
+@api_router.get("/events/{event_id}/attendees", response_model=List[AttendeeInfo])
+async def get_event_attendees(
+    event_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Get event attendees"""
+    rsvps_cursor = db.rsvps.find({"event_id": event_id, "status": RSVPStatus.GOING}, {"_id": 0})
+    rsvps = await rsvps_cursor.to_list(length=500)
+    
+    results = []
+    for rsvp in rsvps:
+        user_doc = await db.users.find_one({"id": rsvp["user_id"]}, {"_id": 0, "password_hash": 0})
+        if not user_doc:
+            continue
+        
+        profile_doc = await db.profiles.find_one({"user_id": rsvp["user_id"]}, {"_id": 0})
+        profile = profile_doc if profile_doc else {}
+        
+        user = UserSearchResult(
+            id=user_doc["id"],
+            full_name=user_doc["full_name"],
+            email=user_doc["email"],
+            role=user_doc["role"],
+            college=user_doc["college"],
+            graduation_year=user_doc.get("graduation_year"),
+            department=user_doc.get("department"),
+            headline=profile.get("headline"),
+            profile_picture=profile.get("profile_picture"),
+            skills=profile.get("skills", []),
+            available_for_mentorship=profile.get("available_for_mentorship", False)
+        )
+        
+        results.append(AttendeeInfo(user=user, rsvp_status=rsvp["status"]))
+    
+    return results
+
+@api_router.get("/events/my/attending", response_model=List[EventWithOrganizer])
+async def get_my_events(current_user: User = Depends(get_current_user)):
+    """Get events user is attending"""
+    rsvps_cursor = db.rsvps.find({
+        "user_id": current_user.id,
+        "status": {"$in": [RSVPStatus.GOING, RSVPStatus.MAYBE]}
+    }, {"_id": 0})
+    rsvps = await rsvps_cursor.to_list(length=100)
+    
+    event_ids = [rsvp["event_id"] for rsvp in rsvps]
+    events_cursor = db.events.find({"id": {"$in": event_ids}}, {"_id": 0}).sort("date", 1)
+    events = await events_cursor.to_list(length=100)
+    
+    results = []
+    for event in events:
+        organizer_doc = await db.users.find_one({"id": event["organizer_id"]}, {"_id": 0, "password_hash": 0})
+        if not organizer_doc:
+            continue
+        
+        profile_doc = await db.profiles.find_one({"user_id": event["organizer_id"]}, {"_id": 0})
+        profile = profile_doc if profile_doc else {}
+        
+        if isinstance(event.get('created_at'), str):
+            event['created_at'] = datetime.fromisoformat(event['created_at'])
+        if isinstance(event.get('updated_at'), str):
+            event['updated_at'] = datetime.fromisoformat(event['updated_at'])
+        
+        event_obj = Event(**event)
+        
+        organizer = UserSearchResult(
+            id=organizer_doc["id"],
+            full_name=organizer_doc["full_name"],
+            email=organizer_doc["email"],
+            role=organizer_doc["role"],
+            college=organizer_doc["college"],
+            graduation_year=organizer_doc.get("graduation_year"),
+            department=organizer_doc.get("department"),
+            headline=profile.get("headline"),
+            profile_picture=profile.get("profile_picture"),
+            skills=profile.get("skills", []),
+            available_for_mentorship=profile.get("available_for_mentorship", False)
+        )
+        
+        user_rsvp = next((r["status"] for r in rsvps if r["event_id"] == event["id"]), None)
+        is_full = event.get("max_attendees") and event.get("attendee_count", 0) >= event.get("max_attendees")
+        
+        results.append(EventWithOrganizer(
+            event=event_obj,
+            organizer=organizer,
+            user_rsvp=user_rsvp,
+            is_full=is_full
+        ))
+    
+    return results
+
 @api_router.get("/")
 async def root():
     return {"message": "CAMPUS-BRIDGE API v1.0"}

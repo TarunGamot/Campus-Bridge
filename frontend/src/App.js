@@ -15,6 +15,7 @@ import Jobs from "./pages/Jobs";
 import JobDetail from "./pages/JobDetail";
 import MyApplications from "./pages/MyApplications";
 import Feed from "./pages/Feed";
+import Events from "./pages/Events";
 
 function App() {
   return (
@@ -35,6 +36,7 @@ function App() {
           <Route path="/jobs/:jobId" element={<ProtectedRoute><JobDetail /></ProtectedRoute>} />
           <Route path="/applications" element={<ProtectedRoute><MyApplications /></ProtectedRoute>} />
           <Route path="/feed" element={<ProtectedRoute><Feed /></ProtectedRoute>} />
+          <Route path="/events" element={<ProtectedRoute><Events /></ProtectedRoute>} />
         </Routes>
       </BrowserRouter>
     </AuthProvider>
