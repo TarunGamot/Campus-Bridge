@@ -8,6 +8,7 @@ import Dashboard from "./pages/Dashboard";
 import ProfileView from "./pages/ProfileView";
 import ProfileEdit from "./pages/ProfileEdit";
 import UserSearch from "./pages/UserSearch";
+import Connections from "./pages/Connections";
 
 function App() {
   return (
@@ -46,6 +47,14 @@ function App() {
             element={
               <ProtectedRoute>
                 <UserSearch />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/connections" 
+            element={
+              <ProtectedRoute>
+                <Connections />
               </ProtectedRoute>
             } 
           />

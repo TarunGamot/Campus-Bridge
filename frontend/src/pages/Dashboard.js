@@ -1,14 +1,42 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
+import axios from 'axios';
 import { 
   GraduationCap, Users, Briefcase, Calendar, MessageSquare, 
   Bell, LogOut, User, Home, BookOpen, Award 
 } from 'lucide-react';
 
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
+const API = `${BACKEND_URL}/api`;
+
 const Dashboard = () => {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const [stats, setStats] = useState({
+    connections: 0,
+    pendingRequests: 0
+  });
+
+  useEffect(() => {
+    loadStats();
+  }, []);
+
+  const loadStats = async () => {
+    try {
+      const [connectionsRes, requestsRes] = await Promise.all([
+        axios.get(`${API}/connections?status=accepted`),
+        axios.get(`${API}/connections/requests/received`)
+      ]);
+      
+      setStats({
+        connections: connectionsRes.data.length,
+        pendingRequests: requestsRes.data.length
+      });
+    } catch (err) {
+      console.error('Failed to load stats:', err);
+    }
+  };
 
   const handleLogout = () => {
     logout();
@@ -76,14 +104,20 @@ const Dashboard = () => {
 
         {/* Quick Stats */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-          <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-200">
+          <div 
+            onClick={() => navigate('/connections')}
+            className="bg-white rounded-xl p-6 shadow-sm border border-gray-200 cursor-pointer hover:shadow-md transition-shadow"
+          >
             <div className="flex items-center justify-between mb-4">
               <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
                 <Users className="w-6 h-6 text-blue-600" />
               </div>
-              <span className="text-2xl font-bold text-gray-800">0</span>
+              <span className="text-2xl font-bold text-gray-800">{stats.connections}</span>
             </div>
             <p className="text-sm text-gray-600 font-medium">Connections</p>
+            {stats.pendingRequests > 0 && (
+              <p className="text-xs text-blue-600 mt-1">{stats.pendingRequests} pending request{stats.pendingRequests !== 1 ? 's' : ''}</p>
+            )}
           </div>
 
           <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-200">

@@ -5,7 +5,8 @@ import axios from 'axios';
 import { 
   Mail, MapPin, Phone, Link as LinkIcon, Briefcase, 
   GraduationCap, Award, Code, Heart, Edit, ArrowLeft,
-  Linkedin, Github, Twitter, Globe, Calendar, Building
+  Linkedin, Github, Twitter, Globe, Calendar, Building,
+  UserPlus, UserCheck, UserX, Clock
 } from 'lucide-react';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -18,11 +19,16 @@ const ProfileView = () => {
   const [profileData, setProfileData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [connectionStatus, setConnectionStatus] = useState(null);
+  const [sendingRequest, setSendingRequest] = useState(false);
 
   const isOwnProfile = currentUser?.id === userId;
 
   useEffect(() => {
     loadProfile();
+    if (!isOwnProfile) {
+      loadConnectionStatus();
+    }
   }, [userId]);
 
   const loadProfile = async () => {
@@ -33,6 +39,48 @@ const ProfileView = () => {
       setError('Failed to load profile');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadConnectionStatus = async () => {
+    try {
+      const response = await axios.get(`${API}/connections/status/${userId}`);
+      setConnectionStatus(response.data);
+    } catch (err) {
+      console.error('Failed to load connection status:', err);
+    }
+  };
+
+  const handleSendRequest = async () => {
+    setSendingRequest(true);
+    try {
+      await axios.post(`${API}/connections/request`, {
+        receiver_id: userId,
+        message: `Hi! I'd like to connect with you.`
+      });
+      loadConnectionStatus();
+    } catch (err) {
+      alert(err.response?.data?.detail || 'Failed to send connection request');
+    } finally {
+      setSendingRequest(false);
+    }
+  };
+
+  const handleAcceptRequest = async () => {
+    try {
+      await axios.put(`${API}/connections/${connectionStatus.connection.id}/accept`);
+      loadConnectionStatus();
+    } catch (err) {
+      alert('Failed to accept request');
+    }
+  };
+
+  const handleRejectRequest = async () => {
+    try {
+      await axios.put(`${API}/connections/${connectionStatus.connection.id}/reject`);
+      loadConnectionStatus();
+    } catch (err) {
+      alert('Failed to reject request');
     }
   };
 
@@ -68,15 +116,67 @@ const ProfileView = () => {
             <ArrowLeft className="w-5 h-5" />
             Back
           </button>
-          {isOwnProfile && (
-            <button 
-              onClick={() => navigate('/profile/edit')}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-            >
-              <Edit className="w-4 h-4" />
-              Edit Profile
-            </button>
-          )}
+          <div className="flex gap-2">
+            {!isOwnProfile && connectionStatus && (
+              <>
+                {connectionStatus.status === 'none' && (
+                  <button 
+                    onClick={handleSendRequest}
+                    disabled={sendingRequest}
+                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                  >
+                    <UserPlus className="w-4 h-4" />
+                    {sendingRequest ? 'Sending...' : 'Connect'}
+                  </button>
+                )}
+                {connectionStatus.status === 'pending' && !connectionStatus.is_sender && (
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={handleAcceptRequest}
+                      className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+                    >
+                      <UserCheck className="w-4 h-4" />
+                      Accept
+                    </button>
+                    <button 
+                      onClick={handleRejectRequest}
+                      className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
+                    >
+                      <UserX className="w-4 h-4" />
+                      Decline
+                    </button>
+                  </div>
+                )}
+                {connectionStatus.status === 'pending' && connectionStatus.is_sender && (
+                  <button 
+                    disabled
+                    className="flex items-center gap-2 px-4 py-2 bg-gray-300 text-gray-600 rounded-lg cursor-not-allowed"
+                  >
+                    <Clock className="w-4 h-4" />
+                    Request Pending
+                  </button>
+                )}
+                {connectionStatus.status === 'accepted' && (
+                  <button 
+                    disabled
+                    className="flex items-center gap-2 px-4 py-2 bg-green-100 text-green-700 rounded-lg cursor-default"
+                  >
+                    <UserCheck className="w-4 h-4" />
+                    Connected
+                  </button>
+                )}
+              </>
+            )}
+            {isOwnProfile && (
+              <button 
+                onClick={() => navigate('/profile/edit')}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+              >
+                <Edit className="w-4 h-4" />
+                Edit Profile
+              </button>
+            )}
+          </div>
         </div>
       </div>
 

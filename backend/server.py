@@ -482,6 +482,422 @@ async def search_users(
     
     return results
 
+# ============= CONNECTION MODELS =============
+
+class ConnectionStatus(str, Enum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+
+class ConnectionRequest(BaseModel):
+    receiver_id: str
+    message: Optional[str] = None
+
+class Connection(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    sender_id: str
+    receiver_id: str
+    status: ConnectionStatus = ConnectionStatus.PENDING
+    message: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class ConnectionWithUser(BaseModel):
+    """Connection with user details"""
+    connection: Connection
+    user: UserSearchResult
+
+# ============= CONNECTION ROUTES =============
+
+@api_router.post("/connections/request", response_model=Connection)
+async def send_connection_request(
+    request: ConnectionRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """Send a connection request to another user"""
+    # Check if user exists
+    receiver = await db.users.find_one({"id": request.receiver_id}, {"_id": 0})
+    if not receiver:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Can't connect to yourself
+    if request.receiver_id == current_user.id:
+        raise HTTPException(status_code=400, detail="Cannot connect to yourself")
+    
+    # Check if connection already exists
+    existing = await db.connections.find_one({
+        "$or": [
+            {"sender_id": current_user.id, "receiver_id": request.receiver_id},
+            {"sender_id": request.receiver_id, "receiver_id": current_user.id}
+        ]
+    })
+    
+    if existing:
+        raise HTTPException(status_code=400, detail="Connection request already exists")
+    
+    # Create connection
+    connection = Connection(
+        sender_id=current_user.id,
+        receiver_id=request.receiver_id,
+        message=request.message
+    )
+    
+    doc = connection.model_dump()
+    doc['created_at'] = doc['created_at'].isoformat()
+    doc['updated_at'] = doc['updated_at'].isoformat()
+    
+    await db.connections.insert_one(doc)
+    
+    return connection
+
+@api_router.put("/connections/{connection_id}/accept", response_model=Connection)
+async def accept_connection(
+    connection_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Accept a connection request"""
+    conn_doc = await db.connections.find_one({"id": connection_id}, {"_id": 0})
+    
+    if not conn_doc:
+        raise HTTPException(status_code=404, detail="Connection request not found")
+    
+    # Only receiver can accept
+    if conn_doc["receiver_id"] != current_user.id:
+        raise HTTPException(status_code=403, detail="You can only accept requests sent to you")
+    
+    # Update status
+    await db.connections.update_one(
+        {"id": connection_id},
+        {"$set": {
+            "status": ConnectionStatus.ACCEPTED,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }}
+    )
+    
+    # Get updated connection
+    updated_doc = await db.connections.find_one({"id": connection_id}, {"_id": 0})
+    if isinstance(updated_doc.get('created_at'), str):
+        updated_doc['created_at'] = datetime.fromisoformat(updated_doc['created_at'])
+    if isinstance(updated_doc.get('updated_at'), str):
+        updated_doc['updated_at'] = datetime.fromisoformat(updated_doc['updated_at'])
+    
+    return Connection(**updated_doc)
+
+@api_router.put("/connections/{connection_id}/reject", response_model=Connection)
+async def reject_connection(
+    connection_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Reject a connection request"""
+    conn_doc = await db.connections.find_one({"id": connection_id}, {"_id": 0})
+    
+    if not conn_doc:
+        raise HTTPException(status_code=404, detail="Connection request not found")
+    
+    # Only receiver can reject
+    if conn_doc["receiver_id"] != current_user.id:
+        raise HTTPException(status_code=403, detail="You can only reject requests sent to you")
+    
+    # Update status
+    await db.connections.update_one(
+        {"id": connection_id},
+        {"$set": {
+            "status": ConnectionStatus.REJECTED,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }}
+    )
+    
+    # Get updated connection
+    updated_doc = await db.connections.find_one({"id": connection_id}, {"_id": 0})
+    if isinstance(updated_doc.get('created_at'), str):
+        updated_doc['created_at'] = datetime.fromisoformat(updated_doc['created_at'])
+    if isinstance(updated_doc.get('updated_at'), str):
+        updated_doc['updated_at'] = datetime.fromisoformat(updated_doc['updated_at'])
+    
+    return Connection(**updated_doc)
+
+@api_router.delete("/connections/{connection_id}")
+async def remove_connection(
+    connection_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Remove a connection"""
+    conn_doc = await db.connections.find_one({"id": connection_id}, {"_id": 0})
+    
+    if not conn_doc:
+        raise HTTPException(status_code=404, detail="Connection not found")
+    
+    # Only participants can remove
+    if conn_doc["sender_id"] != current_user.id and conn_doc["receiver_id"] != current_user.id:
+        raise HTTPException(status_code=403, detail="You can only remove your own connections")
+    
+    await db.connections.delete_one({"id": connection_id})
+    
+    return {"message": "Connection removed"}
+
+@api_router.get("/connections", response_model=List[ConnectionWithUser])
+async def get_connections(
+    status: Optional[ConnectionStatus] = None,
+    current_user: User = Depends(get_current_user)
+):
+    """Get user's connections"""
+    # Build query
+    query = {
+        "$or": [
+            {"sender_id": current_user.id},
+            {"receiver_id": current_user.id}
+        ]
+    }
+    
+    if status:
+        query["status"] = status
+    
+    # Get connections
+    connections_cursor = db.connections.find(query, {"_id": 0})
+    connections = await connections_cursor.to_list(length=100)
+    
+    # Get user details for each connection
+    results = []
+    for conn in connections:
+        # Determine the other user
+        other_user_id = conn["receiver_id"] if conn["sender_id"] == current_user.id else conn["sender_id"]
+        
+        # Get user info
+        user_doc = await db.users.find_one({"id": other_user_id}, {"_id": 0, "password_hash": 0})
+        if not user_doc:
+            continue
+        
+        # Get profile
+        profile_doc = await db.profiles.find_one({"user_id": other_user_id}, {"_id": 0})
+        profile = profile_doc if profile_doc else {}
+        
+        # Convert datetime strings
+        if isinstance(conn.get('created_at'), str):
+            conn['created_at'] = datetime.fromisoformat(conn['created_at'])
+        if isinstance(conn.get('updated_at'), str):
+            conn['updated_at'] = datetime.fromisoformat(conn['updated_at'])
+        
+        connection_obj = Connection(**conn)
+        
+        user_result = UserSearchResult(
+            id=user_doc["id"],
+            full_name=user_doc["full_name"],
+            email=user_doc["email"],
+            role=user_doc["role"],
+            college=user_doc["college"],
+            graduation_year=user_doc.get("graduation_year"),
+            department=user_doc.get("department"),
+            headline=profile.get("headline"),
+            profile_picture=profile.get("profile_picture"),
+            skills=profile.get("skills", []),
+            available_for_mentorship=profile.get("available_for_mentorship", False)
+        )
+        
+        results.append(ConnectionWithUser(connection=connection_obj, user=user_result))
+    
+    return results
+
+@api_router.get("/connections/requests/received", response_model=List[ConnectionWithUser])
+async def get_received_requests(current_user: User = Depends(get_current_user)):
+    """Get connection requests received by current user"""
+    connections_cursor = db.connections.find({
+        "receiver_id": current_user.id,
+        "status": ConnectionStatus.PENDING
+    }, {"_id": 0})
+    connections = await connections_cursor.to_list(length=100)
+    
+    results = []
+    for conn in connections:
+        # Get sender info
+        user_doc = await db.users.find_one({"id": conn["sender_id"]}, {"_id": 0, "password_hash": 0})
+        if not user_doc:
+            continue
+        
+        profile_doc = await db.profiles.find_one({"user_id": conn["sender_id"]}, {"_id": 0})
+        profile = profile_doc if profile_doc else {}
+        
+        if isinstance(conn.get('created_at'), str):
+            conn['created_at'] = datetime.fromisoformat(conn['created_at'])
+        if isinstance(conn.get('updated_at'), str):
+            conn['updated_at'] = datetime.fromisoformat(conn['updated_at'])
+        
+        connection_obj = Connection(**conn)
+        
+        user_result = UserSearchResult(
+            id=user_doc["id"],
+            full_name=user_doc["full_name"],
+            email=user_doc["email"],
+            role=user_doc["role"],
+            college=user_doc["college"],
+            graduation_year=user_doc.get("graduation_year"),
+            department=user_doc.get("department"),
+            headline=profile.get("headline"),
+            profile_picture=profile.get("profile_picture"),
+            skills=profile.get("skills", []),
+            available_for_mentorship=profile.get("available_for_mentorship", False)
+        )
+        
+        results.append(ConnectionWithUser(connection=connection_obj, user=user_result))
+    
+    return results
+
+@api_router.get("/connections/requests/sent", response_model=List[ConnectionWithUser])
+async def get_sent_requests(current_user: User = Depends(get_current_user)):
+    """Get connection requests sent by current user"""
+    connections_cursor = db.connections.find({
+        "sender_id": current_user.id,
+        "status": ConnectionStatus.PENDING
+    }, {"_id": 0})
+    connections = await connections_cursor.to_list(length=100)
+    
+    results = []
+    for conn in connections:
+        # Get receiver info
+        user_doc = await db.users.find_one({"id": conn["receiver_id"]}, {"_id": 0, "password_hash": 0})
+        if not user_doc:
+            continue
+        
+        profile_doc = await db.profiles.find_one({"user_id": conn["receiver_id"]}, {"_id": 0})
+        profile = profile_doc if profile_doc else {}
+        
+        if isinstance(conn.get('created_at'), str):
+            conn['created_at'] = datetime.fromisoformat(conn['created_at'])
+        if isinstance(conn.get('updated_at'), str):
+            conn['updated_at'] = datetime.fromisoformat(conn['updated_at'])
+        
+        connection_obj = Connection(**conn)
+        
+        user_result = UserSearchResult(
+            id=user_doc["id"],
+            full_name=user_doc["full_name"],
+            email=user_doc["email"],
+            role=user_doc["role"],
+            college=user_doc["college"],
+            graduation_year=user_doc.get("graduation_year"),
+            department=user_doc.get("department"),
+            headline=profile.get("headline"),
+            profile_picture=profile.get("profile_picture"),
+            skills=profile.get("skills", []),
+            available_for_mentorship=profile.get("available_for_mentorship", False)
+        )
+        
+        results.append(ConnectionWithUser(connection=connection_obj, user=user_result))
+    
+    return results
+
+@api_router.get("/connections/status/{user_id}")
+async def get_connection_status(
+    user_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Check connection status with a specific user"""
+    if user_id == current_user.id:
+        return {"status": "self"}
+    
+    # Check if connection exists
+    conn = await db.connections.find_one({
+        "$or": [
+            {"sender_id": current_user.id, "receiver_id": user_id},
+            {"sender_id": user_id, "receiver_id": current_user.id}
+        ]
+    }, {"_id": 0})
+    
+    if not conn:
+        return {"status": "none", "connection": None}
+    
+    # Convert datetime strings
+    if isinstance(conn.get('created_at'), str):
+        conn['created_at'] = datetime.fromisoformat(conn['created_at'])
+    if isinstance(conn.get('updated_at'), str):
+        conn['updated_at'] = datetime.fromisoformat(conn['updated_at'])
+    
+    return {
+        "status": conn["status"],
+        "connection": Connection(**conn),
+        "is_sender": conn["sender_id"] == current_user.id
+    }
+
+@api_router.get("/connections/suggestions", response_model=List[UserSearchResult])
+async def get_connection_suggestions(
+    limit: int = 10,
+    current_user: User = Depends(get_current_user)
+):
+    """Get suggested connections based on college, department, and interests"""
+    # Get current user's profile
+    current_profile = await db.profiles.find_one({"user_id": current_user.id}, {"_id": 0})
+    
+    # Get existing connections
+    connections_cursor = db.connections.find({
+        "$or": [
+            {"sender_id": current_user.id, "status": "accepted"},
+            {"receiver_id": current_user.id, "status": "accepted"}
+        ]
+    }, {"_id": 0})
+    connections = await connections_cursor.to_list(length=1000)
+    connected_user_ids = set()
+    for conn in connections:
+        if conn["sender_id"] == current_user.id:
+            connected_user_ids.add(conn["receiver_id"])
+        else:
+            connected_user_ids.add(conn["sender_id"])
+    
+    # Get pending requests
+    pending_cursor = db.connections.find({
+        "$or": [
+            {"sender_id": current_user.id, "status": "pending"},
+            {"receiver_id": current_user.id, "status": "pending"}
+        ]
+    }, {"_id": 0})
+    pending = await pending_cursor.to_list(length=1000)
+    for conn in pending:
+        if conn["sender_id"] == current_user.id:
+            connected_user_ids.add(conn["receiver_id"])
+        else:
+            connected_user_ids.add(conn["sender_id"])
+    
+    # Build suggestion query - same college or department
+    suggestion_query = {
+        "id": {"$ne": current_user.id, "$nin": list(connected_user_ids)},
+        "$or": [
+            {"college": current_user.college},
+            {"department": current_user.department}
+        ]
+    }
+    
+    # Get suggested users
+    users_cursor = db.users.find(suggestion_query, {"_id": 0, "password_hash": 0}).limit(limit)
+    users = await users_cursor.to_list(length=limit)
+    
+    # Get profiles
+    user_ids = [u["id"] for u in users]
+    profiles_cursor = db.profiles.find({"user_id": {"$in": user_ids}}, {"_id": 0})
+    profiles = await profiles_cursor.to_list(length=limit)
+    profile_map = {p["user_id"]: p for p in profiles}
+    
+    # Build results
+    results = []
+    for user in users:
+        profile = profile_map.get(user["id"], {})
+        
+        result = UserSearchResult(
+            id=user["id"],
+            full_name=user["full_name"],
+            email=user["email"],
+            role=user["role"],
+            college=user["college"],
+            graduation_year=user.get("graduation_year"),
+            department=user.get("department"),
+            headline=profile.get("headline"),
+            profile_picture=profile.get("profile_picture"),
+            skills=profile.get("skills", []),
+            available_for_mentorship=profile.get("available_for_mentorship", False)
+        )
+        results.append(result)
+    
+    return results
+
 @api_router.get("/")
 async def root():
     return {"message": "CAMPUS-BRIDGE API v1.0"}
